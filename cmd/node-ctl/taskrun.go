@@ -150,6 +150,9 @@ func launchTaskWith(ctx context.Context, stopContext func(), socket, sandboxID, 
 	if arg, ok := launchSpecArtifactArg(spec.Args); ok {
 		return fmt.Errorf("launch spec must not set task-owned artifact argument %q", arg)
 	}
+	if err := validateLaunchBackendArgs(spec.Args, preparedSource); err != nil {
+		return err
+	}
 	workdir := spec.Workdir
 	if workdir == "" {
 		workdir = bootstrap.Workdir
@@ -278,6 +281,61 @@ func launchSpecArtifactArg(args []string) (string, bool) {
 		}
 	}
 	return "", false
+}
+
+// Parse the authoritative final argv, rather than scanning for a selector that
+// Go's flag parser might never reach (after a positional argument or --). The
+// node owns this vocabulary; neither environment nor artifact preparation can
+// replace the conductor's backend selection. An absent selector is legacy CH.
+func validateLaunchBackendArgs(args []string, source types.ResumeSource) error {
+	if len(args) == 0 || args[0] != "run" {
+		return fmt.Errorf("launch spec must invoke sandbox-ctl run")
+	}
+	values := map[string]string{}
+	repeatable := map[string]bool{"--connect": true, "--ref-location": true, "--log-to": true, "--stdout-to": true, "--stderr-to": true}
+	for i := 1; i < len(args); i++ {
+		name, value, inline := strings.Cut(args[i], "=")
+		switch name {
+		case "--backend", "--firecracker-binary", "--sandbox-id", "--run-id", "--path-id", "--config", "--manifest-config", "--run-root", "--base-root", "--log-to", "--stdout-to", "--stderr-to", "--console", "--connect", "--ref-location", "--retain-instance":
+			if !inline {
+				if i+1 >= len(args) || strings.HasPrefix(args[i+1], "-") {
+					return fmt.Errorf("launch spec argument %s requires a value", name)
+				}
+				i++
+				value = args[i]
+			}
+			if value == "" || strings.IndexByte(value, 0) >= 0 {
+				return fmt.Errorf("launch spec argument %s has an empty or malformed value", name)
+			}
+		case "--enable-checkpoint":
+			if inline && value != "true" && value != "false" {
+				return fmt.Errorf("launch spec argument %s requires a boolean", name)
+			}
+			if !inline {
+				value = "true"
+			}
+		default:
+			return fmt.Errorf("launch spec has unknown or malformed argument %q", args[i])
+		}
+		if _, seen := values[name]; seen && !repeatable[name] {
+			return fmt.Errorf("launch spec has duplicate %s", name)
+		}
+		values[name] = value
+	}
+	backend := values["--backend"]
+	if backend == "" {
+		backend = "cloud-hypervisor"
+	}
+	if backend != "cloud-hypervisor" && backend != "firecracker" {
+		return fmt.Errorf("launch spec has unsupported backend %q", backend)
+	}
+	if backend == "firecracker" && (!source.Empty() || values["--enable-checkpoint"] == "true" || values["--retain-instance"] != "") {
+		return fmt.Errorf("launch spec: firecracker requires image cold boot without checkpoint retention or restore")
+	}
+	if backend != "firecracker" && values["--firecracker-binary"] != "" {
+		return fmt.Errorf("launch spec: --firecracker-binary requires --backend firecracker")
+	}
+	return nil
 }
 
 func envDefault(p *string, key string) {

@@ -4,8 +4,9 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"github.com/kuasar-sandbox/orchestrator/internal/workspace"
 	"time"
+
+	"github.com/kuasar-sandbox/orchestrator/internal/workspace"
 
 	"github.com/google/uuid"
 
@@ -137,6 +138,9 @@ type sandboxCreateConfig struct {
 }
 
 func (o *Orchestrator) normalizeSandboxCreateConfig(profile types.Profile, metadata map[string]string) (sandboxCreateConfig, error) {
+	if _, present := metadata[sandboxBackendKey]; present {
+		return sandboxCreateConfig{}, fmt.Errorf("%w: sandbox backend is node-managed", api.ErrBadRequest)
+	}
 	if _, present := metadata[sandboxcfg.NsIdentity]; present {
 		return sandboxCreateConfig{}, fmt.Errorf("%w: %s cannot override core-owned sandbox identity", api.ErrBadRequest, sandboxcfg.NsIdentity)
 	}
@@ -198,6 +202,9 @@ type sandboxCreateSpec struct {
 // and node-link Create. Source-specific authentication and Hook restrictions
 // stay in the adapters; launch ownership and rollback stay in acceptFreshLaunch.
 func (o *Orchestrator) acceptSandboxCreate(ctx context.Context, spec sandboxCreateSpec) (*types.Sandbox, *launchAttempt, error) {
+	if o.firecracker() && (spec.Template.Kind != types.KindImg || spec.AutoReset || spec.IdleTimeout != nil || len(spec.Config.Workspaces) != 0 || spec.Config.Metadata[workspace.Namespace] != "") {
+		return nil, nil, fmt.Errorf("%w: firecracker requires an image template with no auto-reset, idle auto-pause, or workspace slots", api.ErrBadRequest)
+	}
 	if err := types.ValidateIdleTimeout(spec.IdleTimeout); err != nil {
 		return nil, nil, fmt.Errorf("%w: %v", api.ErrBadRequest, err)
 	}
@@ -220,6 +227,10 @@ func (o *Orchestrator) acceptSandboxCreate(ctx context.Context, spec sandboxCrea
 		Metadata: cloneStringMap(spec.Config.Metadata), Env: cloneStringMap(spec.Env),
 		CreatedUnix: now.Unix(), DeadlineUnix: now.Add(time.Duration(spec.TimeoutSeconds) * time.Second).Unix(),
 	}
+	if sb.Metadata == nil {
+		sb.Metadata = make(map[string]string)
+	}
+	sb.Metadata[sandboxBackendKey] = o.cfg.Sandbox.EffectiveBackend()
 	if err := o.prepareCreateWorkspaces(ctx, sb, spec.Config.Workspaces, spec.Template.Kind == types.KindImg); err != nil {
 		return nil, nil, err
 	}

@@ -31,6 +31,9 @@ func (o *Orchestrator) workspaceOperation(ctx context.Context) (context.Context,
 }
 
 func (o *Orchestrator) ExportWorkspace(ctx context.Context, id, apiKey, name string) (string, error) {
+	if err := o.rejectFirecracker("workspace capture/export"); err != nil {
+		return "", err
+	}
 	ctx, finish, err := o.workspaceOperation(ctx)
 	if err != nil {
 		return "", err

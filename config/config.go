@@ -12,7 +12,6 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
-	rtconfig "github.com/kuasar-sandbox/sandboxer/pkg/config"
 	"io"
 	"net"
 	"net/url"
@@ -22,6 +21,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	rtconfig "github.com/kuasar-sandbox/sandboxer/pkg/config"
 
 	"github.com/kuasar-sandbox/orchestrator/internal/buildcfg"
 	"github.com/kuasar-sandbox/orchestrator/internal/listenresource"
@@ -445,14 +446,16 @@ func (u UnitsConfig) PoolWaitDuration() time.Duration {
 
 // SandboxConfig is the sandbox-instance defaults, sub-grouped for clarity.
 type SandboxConfig struct {
-	TimeoutSec int                   `yaml:"timeout_sec" json:"timeout_sec"` // default TTL; default 300
-	DeadTTL    string                `yaml:"dead_ttl" json:"dead_ttl"`       // diagnostic dead-row retention; default 24h
-	Capacity   int                   `yaml:"capacity" json:"capacity"`       // max sandboxes this node admits (cluster headroom denominator; docs/cluster.md#placer-placement); 0 = unbounded
-	Resources  ResourcesConfig       `yaml:"resources" json:"resources"`     // capacity + resource control
-	Timeouts   SandboxTimeoutsConfig `yaml:"timeouts,omitempty" json:"timeouts,omitempty"`
-	Usage      UsageConfig           `yaml:"usage" json:"usage"`     // node-local native accounting policy
-	Network    NetworkConfig         `yaml:"network" json:"network"` // vswitch + inner IP
-	Boot       BootConfig            `yaml:"boot" json:"boot"`       // boot artifacts (kernel / guest runtime / overlay)
+	Backend           string                `yaml:"backend" json:"backend"` // cloud-hypervisor (default) or firecracker
+	FirecrackerBinary string                `yaml:"firecracker_binary,omitempty" json:"firecracker_binary,omitempty"`
+	TimeoutSec        int                   `yaml:"timeout_sec" json:"timeout_sec"` // default TTL; default 300
+	DeadTTL           string                `yaml:"dead_ttl" json:"dead_ttl"`       // diagnostic dead-row retention; default 24h
+	Capacity          int                   `yaml:"capacity" json:"capacity"`       // max sandboxes this node admits (cluster headroom denominator; docs/cluster.md#placer-placement); 0 = unbounded
+	Resources         ResourcesConfig       `yaml:"resources" json:"resources"`     // capacity + resource control
+	Timeouts          SandboxTimeoutsConfig `yaml:"timeouts,omitempty" json:"timeouts,omitempty"`
+	Usage             UsageConfig           `yaml:"usage" json:"usage"`     // node-local native accounting policy
+	Network           NetworkConfig         `yaml:"network" json:"network"` // vswitch + inner IP
+	Boot              BootConfig            `yaml:"boot" json:"boot"`       // boot artifacts (kernel / guest runtime / overlay)
 }
 
 func (s SandboxConfig) DeadTTLDur() time.Duration {
@@ -1040,6 +1043,7 @@ func (c *Conductor) applyDefaults() {
 	def(&c.Proxy.ParkTimeout, "30s")
 	def(&c.ManifestConfig, "/opt/sandbox/manifest.yaml")
 	def(&c.Paths.RunRoot, "/run/sandbox")
+	def(&c.Sandbox.Backend, "cloud-hypervisor")
 	def(&c.Sandbox.Usage.SampleInterval, "1s")
 	def(&c.Sandbox.Usage.FlushInterval, "5m")
 	def(&c.Paths.BaseRoot, "/var/lib/sandbox")
@@ -1173,6 +1177,9 @@ func validateAdvertisedEndpoint(name, endpoint string) error {
 }
 
 func (c *Conductor) validateDeclarative() error {
+	if err := c.validateBackend(); err != nil {
+		return err
+	}
 	if d := c.Sandbox.Boot.WorkspaceDefaultDisk; d != nil {
 		if err := d.Validate(); err != nil {
 			return fmt.Errorf("config: sandbox.boot.workspace_default_disk: %w", err)

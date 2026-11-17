@@ -12,12 +12,13 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
-	"github.com/kuasar-sandbox/orchestrator/internal/workspace"
 	"io"
 	"os"
 	"path/filepath"
 	"strings"
 	"time"
+
+	"github.com/kuasar-sandbox/orchestrator/internal/workspace"
 
 	"github.com/kuasar-sandbox/accelerator/pkg/manifest"
 
@@ -35,6 +36,9 @@ import (
 // the source lifecycle lock: an accepted resume may preempt a KMT export or
 // detach a template export before the short source finalizer begins.
 func (o *Orchestrator) ExportSandbox(ctx context.Context, apiKey, sid string, toTemplate, keepSource bool, checkpointID string) (types.ExportResult, error) {
+	if err := o.rejectFirecracker("artifact/template export"); err != nil {
+		return types.ExportResult{}, err
+	}
 	if checkpointID != "" && keepSource {
 		return types.ExportResult{}, fmt.Errorf("%w: checkpoint export always consumes the checkpoint", api.ErrBadRequest)
 	}
@@ -496,6 +500,9 @@ func (o *Orchestrator) importSandboxWithKeyOptions(
 	options api.ImportOptions,
 	mmdsImport standaloneMMDSImport,
 ) (*types.Sandbox, error) {
+	if err := o.rejectFirecracker("artifact import/restore"); err != nil {
+		return nil, err
+	}
 	if targetID != "" && !types.ValidLocalSandboxID(targetID) {
 		return nil, fmt.Errorf("import-sandbox: invalid target sandbox ID: %w", api.ErrBadRequest)
 	}
@@ -707,7 +714,7 @@ func migrationSandboxMetadata(metadata map[string]string) (map[string]string, er
 	}
 	cleaned := make(map[string]string, len(metadata))
 	for key, value := range metadata {
-		if key != sandboxcfg.NsCredentials {
+		if key != sandboxcfg.NsCredentials && key != sandboxBackendKey {
 			cleaned[key] = value
 		}
 	}

@@ -9,7 +9,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"github.com/kuasar-sandbox/orchestrator/internal/workspace"
 	"log/slog"
 	"net"
 	"net/http"
@@ -20,6 +19,8 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
+
+	"github.com/kuasar-sandbox/orchestrator/internal/workspace"
 
 	"github.com/google/uuid"
 	"github.com/kuasar-sandbox/accelerator/pkg/manifest"
@@ -1255,6 +1256,9 @@ func (o *Orchestrator) killSandboxLocked(ctx context.Context, sb *types.Sandbox)
 }
 
 func (o *Orchestrator) Pause(ctx context.Context, id, apiKey string, request sandboxcfg.CaptureRequest) (string, error) {
+	if err := o.rejectFirecracker("pause/capture (including memory=false)"); err != nil {
+		return "", err
+	}
 	if err := validateCaptureRequest(request); err != nil {
 		return "", err
 	}
@@ -1434,6 +1438,11 @@ func (o *Orchestrator) pauseSandbox(ctx context.Context, sb *types.Sandbox) erro
 	if current == nil {
 		return api.ErrNotFound
 	}
+	if o.firecracker() {
+		// Firecracker cold disks are disposable: TTL expiry deletes, not captures.
+		_, err := o.killSandboxLocked(ctx, current)
+		return err
+	}
 	switch current.State {
 	case types.StatePaused:
 		return api.ErrAlreadyPaused
@@ -1472,6 +1481,9 @@ func validateCaptureRequest(request sandboxcfg.CaptureRequest) error {
 }
 
 func (o *Orchestrator) pauseSandboxLocked(ctx context.Context, sb *types.Sandbox, request sandboxcfg.CaptureRequest, beforeCapture ...func() error) (string, error) {
+	if err := o.rejectFirecracker("pause/capture"); err != nil {
+		return "", err
+	}
 	if sb.State == types.StatePaused {
 		return "", api.ErrAlreadyPaused
 	}
@@ -1944,6 +1956,9 @@ func (o *Orchestrator) ensureResumeAcceptedPreparedFrom(
 		}
 		return cloneSandbox(sb), attempt, nil
 	case types.StatePaused:
+		if err := o.rejectFirecracker("resume"); err != nil {
+			return nil, nil, err
+		}
 		// A failed resume publishes paused before Finish closes done. During that
 		// intentional terminal-publication window the old attempt still owns the
 		// cleanup fence, so join it and retry admission after the claim is released.
@@ -2208,6 +2223,17 @@ func (o *Orchestrator) prepareSandboxLaunch(ctx context.Context, sb *types.Sandb
 	if sb == nil {
 		return nil, errors.New("orch: sandbox launch preflight requires a sandbox")
 	}
+	if sandboxBackend(sb) != o.cfg.Sandbox.EffectiveBackend() {
+		return nil, fmt.Errorf("%w: sandbox backend differs from node backend", api.ErrBadRequest)
+	}
+	if o.firecracker() {
+		if tmpl.Kind != types.KindImg || sb.LaunchMode != types.LaunchImage || !sb.ResumeSource.Empty() {
+			return nil, fmt.Errorf("%w: firecracker supports image cold boot only", api.ErrBadRequest)
+		}
+		if o.cfg.ResourceListen != nil && o.cfg.ResourceListen.Enabled {
+			return nil, fmt.Errorf("%w: firecracker dynamic resource controller is unsupported", api.ErrBadRequest)
+		}
+	}
 	spec, err := sandboxcfg.ParseSpec(sb.Metadata)
 	if err != nil {
 		return nil, err
@@ -2237,6 +2263,9 @@ func (o *Orchestrator) prepareSandboxLaunch(ctx context.Context, sb *types.Sandb
 			return nil, fmt.Errorf("%w: %v", api.ErrBadRequest, err)
 		}
 		return nil, fmt.Errorf("orch: resolve sandbox resources: %w", err)
+	}
+	if err := o.cfg.Sandbox.ValidateBackendResources(resources); err != nil {
+		return nil, fmt.Errorf("%w: %v", api.ErrBadRequest, err)
 	}
 	network, err := o.resolveNetwork(tmpl.Profile, spec.Network, o.cfg.Sandbox.Network.Hostname)
 	if err != nil {
@@ -2584,9 +2613,7 @@ func (o *Orchestrator) sandboxFinalLaunchSpec(sb *types.Sandbox, tmpl types.Temp
 	// directories sandbox-ctl owns and local control commands find ctl.sock.
 	args := []string{
 		"run", "--sandbox-id", sb.ID,
-		"--enable-checkpoint",
-		"--retain-instance", sb.InstanceID,
-		"--run-id", sb.RunID,
+		"--backend", sandboxBackend(sb),
 		"--path-id", sb.ID,
 		"--config", o.sandboxConfigPath(sb),
 		"--manifest-config", o.cfg.ManifestConfig,
@@ -2598,6 +2625,11 @@ func (o *Orchestrator) sandboxFinalLaunchSpec(sb *types.Sandbox, tmpl types.Temp
 		"--stdout-to", sandboxJournalTarget(configsock.RunnerLogTag, sb),
 		"--stderr-to", sandboxJournalTarget(configsock.RunnerLogTag, sb),
 		"--console", sandboxJournalTarget(configsock.ConsoleTag, sb),
+	}
+	if sandboxBackend(sb) == "cloud-hypervisor" {
+		args = append(args, "--run-id", sb.RunID, "--enable-checkpoint", "--retain-instance", sb.InstanceID)
+	} else if o.cfg.Sandbox.FirecrackerBinary != "" {
+		args = append(args, "--firecracker-binary", o.cfg.Sandbox.FirecrackerBinary)
 	}
 	args = appendRefLocationArgs(args, locations)
 	for _, c := range p.ConnectSpecs() {
@@ -2693,6 +2725,9 @@ func (o *Orchestrator) Reconcile(ctx context.Context) error {
 // network ownership but remain starting with their durable launch_mode; run-pool
 // startup retries that same accepted cold or memory decision.
 func (o *Orchestrator) ReconcileSandboxes(ctx context.Context) error {
+	if err := o.validateBackendRecovery(ctx); err != nil {
+		return err
+	}
 	if o.memoryPressure.Load() == nil {
 		if err := o.restoreResourcePlacements(ctx, nil); err != nil {
 			return err
@@ -3037,6 +3072,9 @@ func (o *Orchestrator) startRecoveredResume(ctx context.Context, recovered *type
 // is accepting phase/result reports. It must run before new Build work is
 // admitted to the run pool.
 func (o *Orchestrator) ReconcileBuilds(ctx context.Context) error {
+	if err := o.validateFirecrackerBuildRecovery(ctx); err != nil {
+		return err
+	}
 	if err := o.reconcileBuilds(ctx); err != nil {
 		return err
 	}
@@ -3174,6 +3212,9 @@ func (o *Orchestrator) teardownPersistedOwnership(ctx context.Context, sb *types
 // paused row. Local references remain content-identified basenames; execution
 // resolves them in this sandbox's checkpoint directory.
 func (o *Orchestrator) capture(ctx context.Context, sb *types.Sandbox, request sandboxcfg.CaptureRequest) (sandboxcfg.CaptureResult, error) {
+	if err := o.rejectFirecracker("capture"); err != nil {
+		return sandboxcfg.CaptureResult{}, err
+	}
 	if err := validateCaptureRequest(request); err != nil {
 		return sandboxcfg.CaptureResult{}, err
 	}

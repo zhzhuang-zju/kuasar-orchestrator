@@ -81,6 +81,9 @@ func buildRegisterRequestFromCandidate(candidate *normalizedBuildRegistration) *
 // resources. It is run once for preliminary request validation and again after
 // a Hook so every modified field passes the core's canonical policy.
 func (o *Orchestrator) normalizeBuildRegistration(request *conductorextension.BuildRegisterRequest, mmdsHeader *string) (*normalizedBuildRegistration, error) {
+	if err := o.rejectFirecracker("builds (builder shares sandbox configuration)"); err != nil {
+		return nil, err
+	}
 	if request == nil {
 		return nil, fmt.Errorf("%w: build registration candidate is required", api.ErrBadRequest)
 	}

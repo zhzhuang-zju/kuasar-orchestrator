@@ -90,6 +90,11 @@ paths:
 
 # Sandbox-instance defaults.
 sandbox:
+  # VMM backend: cloud-hypervisor (default) or firecracker (experimental cold images only).
+  # Firecracker requires the matching sandboxer + guest-runtime adapter builds;
+  # see docs/firecracker.md for static-memory and lifecycle restrictions.
+  # backend: cloud-hypervisor
+  # firecracker_binary: /opt/kuasar/bin/firecracker
   timeout_sec: 300                                # default TTL
   # timeouts:                                    # node-local SDK policy, also used by Builder
   #   app_start: 0                                # post-ACK overall bound; 0/omitted = none

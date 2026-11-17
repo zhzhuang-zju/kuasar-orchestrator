@@ -71,6 +71,9 @@ func workspaceDeclared(sb *types.Sandbox, name string) bool {
 }
 
 func (o *Orchestrator) AttachWorkspace(ctx context.Context, id, apiKey, name string, input json.RawMessage) error {
+	if err := o.rejectFirecracker("dynamic workspace attachment"); err != nil {
+		return err
+	}
 	ctx, finish, err := o.workspaceOperation(ctx)
 	if err != nil {
 		return err
