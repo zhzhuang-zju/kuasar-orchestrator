@@ -295,6 +295,9 @@ func (o *Orchestrator) pauseForPressureMode(ctx context.Context, candidate *type
 	if sb == nil || sb.State != types.StateRunning || sb.RunID != candidate.RunID || sb.ResourceObligation {
 		return api.ErrSandboxChanged
 	}
+	if err := rejectSandboxFirecracker(sb, "memory pressure capture"); err != nil {
+		return err
+	}
 	if o.memoryPressure.Load().admission.IsDrained() {
 		return api.ErrResourceUnavailable
 	}
@@ -587,7 +590,7 @@ func pressurePauseCandidate(rows []*types.Sandbox, snapshot nodectl.PressureSnap
 		return rows[i].RunningSinceUnixNano < rows[j].RunningSinceUnixNano
 	})
 	for _, sb := range rows {
-		if sb.State != types.StateRunning || sb.ResourceObligation || sb.ID == snapshot.Beneficiary || now.Before(backoff[sb.ID]) || !eligible(sb.ID) {
+		if sandboxBackend(sb) != "cloud-hypervisor" || sb.State != types.StateRunning || sb.ResourceObligation || sb.ID == snapshot.Beneficiary || now.Before(backoff[sb.ID]) || !eligible(sb.ID) {
 			continue
 		}
 		if sb.RunningSinceUnixNano == 0 || now.Sub(time.Unix(0, sb.RunningSinceUnixNano)) < minimum {

@@ -46,6 +46,12 @@ type SandboxOperation struct {
 // still resolve to that profile. MMDS preserves whether a top-level MMDS value
 // was supplied. All maps and pointers are independent copies.
 type SandboxCreateRequest struct {
+	// Backend is normalized from public kuasar-sandbox.backend metadata before
+	// the Hook. Do not reintroduce that metadata key or write the internal key.
+	// It selects cloud-hypervisor or firecracker; empty uses the node
+	// default. JSON null has omission semantics, as on the HTTP create input.
+	// Hooks may change the selection; core revalidates it after the callback.
+	Backend         string `json:"backend,omitempty"`
 	TemplateID      string
 	Profile         Profile
 	TimeoutSeconds  int

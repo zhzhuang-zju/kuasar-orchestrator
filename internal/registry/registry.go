@@ -468,6 +468,7 @@ func flightKey(group, routeKey string) string { return group + "\x00" + routeKey
 type createOptions struct {
 	idleTimeout *int64
 	workspaces  []workspace.Entry
+	backend     string
 }
 
 // reserveCreate resolves (group, route_key) to a running sandbox, placing +
@@ -734,6 +735,7 @@ func (r *Registry) placeAndCreate(ctx context.Context, group, routeKey string, c
 		return errors.New("registry: create credentials were not separated from config")
 	}
 	idleTimeout := types.CloneIdleTimeout(opts.idleTimeout)
+	backend := opts.backend
 	workspaceDigest, err := workspace.InputDigest(opts.workspaces)
 	if err != nil {
 		return fmt.Errorf("%w: invalid workspace declaration", errInvalidSandboxConfig)
@@ -755,11 +757,12 @@ func (r *Registry) placeAndCreate(ctx context.Context, group, routeKey string, c
 			return err
 		}
 		// A Ready replacement continues the same logical sandbox. Freeze the
-		// original TTL capture policy together with its stable identity and
-		// materialized credentials instead of adopting a retrying Create body.
+		// original backend and TTL capture policy together with its stable identity
+		// and materialized credentials instead of adopting a retrying Create body.
 		autoPauseMemory = replaceReady.AutoPauseMemory
 		idleTimeout = types.CloneIdleTimeout(replaceReady.IdleTimeout)
 		autoReset = replaceReady.AutoReset
+		backend = replaceReady.Backend
 	}
 	excluded := placementExclusions{}
 	casConflicts := 0
@@ -797,9 +800,9 @@ func (r *Registry) placeAndCreate(ctx context.Context, group, routeKey string, c
 		selectedReplacement := workflowReplacement
 		binding := workflowReplacement
 		if curFound && cur.State == StateReserved {
-			// The first committed RESERVED row freezes the create credential
-			// selection and TTL capture policy. A retry or competing Reserve must
-			// not adopt either value from its own request after that point.
+			// The first committed RESERVED row freezes the backend, create credentials,
+			// and TTL capture policy. A retry or competing Reserve must not adopt
+			// these values from its own request after that point.
 			if cur.WorkspacesDigest != workspaceDigest {
 				// Another request owns this reservation. Wait for its authoritative route.
 				return nil
@@ -808,6 +811,7 @@ func (r *Registry) placeAndCreate(ctx context.Context, group, routeKey string, c
 			autoPauseMemory = cur.AutoPauseMemory
 			idleTimeout = types.CloneIdleTimeout(cur.IdleTimeout)
 			autoReset = cur.AutoReset
+			backend = cur.Backend
 			if hasRouteCredentials(cur) {
 				selectedCredentials, _, err = replacementCredentials(cur)
 				if err != nil {
@@ -888,6 +892,7 @@ func (r *Registry) placeAndCreate(ctx context.Context, group, routeKey string, c
 		}
 		cmd := &routesync.Command{
 			CmdID: newID(), Kind: routesync.CmdCreate, SID: nodeSandboxID,
+			Backend:     backend,
 			TemplateRef: placement.TemplateRef, Profile: string(template.Profile), Config: config, Workspaces: opts.workspaces,
 			Cluster: &routesync.ClusterSandboxContext{
 				Group: group, RouteKey: routeKey, StableID: stableID,
@@ -916,6 +921,7 @@ func (r *Registry) placeAndCreate(ctx context.Context, group, routeKey string, c
 			SandboxID: sandboxID, NodeSandboxID: nodeSandboxID,
 			SandboxGeneration: generation, NextSandboxGeneration: generation + 1,
 			State: StateReserved, NodeID: nodeID,
+			Backend:    backend,
 			TemplateID: placement.TemplateRef, Profile: string(template.Profile),
 			APISecretFingerprint: placement.APISecretFingerprint,
 			CreateCredentials:    cloneCreateCredentials(selectedCredentials), WorkspacesDigest: workspaceDigest,
@@ -1344,6 +1350,7 @@ func (r *Registry) tryApplyLiveRoute(ctx context.Context, nodeID string, e *rout
 		rec.TargetPort = cur.TargetPort
 	}
 	rec.AutoPauseMemory = cur.AutoPauseMemory
+	rec.Backend = cur.Backend
 	rec.IdleTimeout = types.CloneIdleTimeout(e.IdleTimeout)
 	rec.AutoReset = cur.AutoReset
 	rec.NextSandboxGeneration = cur.NextSandboxGeneration

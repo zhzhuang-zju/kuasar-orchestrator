@@ -90,9 +90,17 @@ paths:
 
 # Sandbox-instance defaults.
 sandbox:
-  # VMM backend: cloud-hypervisor (default) or firecracker (experimental cold images only).
+  # Create default: cloud-hypervisor (CH) or firecracker (FC, experimental cold images only).
+  # Create metadata["kuasar-sandbox.backend"] = "{\"name\":\"firecracker\"}"
+  # selects FC (or use name cloud-hypervisor); only omission uses this default.
+  # The obsolete public top-level backend field, empty/null names and malformed
+  # metadata objects are rejected. This is not a template/Build backend default.
+  # Selection is fixed at Create; changing this default does not change retained sandboxes.
+  # Mixed CH/FC nodes are supported, but FC is rejected while resource_listen is enabled.
   # Firecracker requires the matching sandboxer + guest-runtime adapter builds;
-  # see docs/firecracker.md for static-memory and lifecycle restrictions.
+  # explicitly set allocatable.memory = capacity.memory in node/request resources,
+  # and omit startup.memory or set it to capacity.memory. No automatic FC resource rewrite.
+  # FC TTL deletes rather than pauses; see docs/firecracker.md for lifecycle restrictions.
   # backend: cloud-hypervisor
   # firecracker_binary: /opt/kuasar/bin/firecracker
   timeout_sec: 300                                # default TTL
@@ -127,7 +135,8 @@ sandbox:
     overlay_diff_template: /opt/sandbox/overlay-templates/basic-1G.ext4
 
 # Build-instance settings. Builds run INSIDE build sandboxes (tenant network +
-# isolation): image pull and step execution happen in microVMs booted from the
+# isolation), always using CH independently of sandbox.backend. Image pull and
+# step execution happen in microVMs booted from the
 # same guest runtime; only artifact relay and the final uploads run on the host.
 builder:
   admission:

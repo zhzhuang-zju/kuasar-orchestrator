@@ -36,9 +36,6 @@ import (
 // the source lifecycle lock: an accepted resume may preempt a KMT export or
 // detach a template export before the short source finalizer begins.
 func (o *Orchestrator) ExportSandbox(ctx context.Context, apiKey, sid string, toTemplate, keepSource bool, checkpointID string) (types.ExportResult, error) {
-	if err := o.rejectFirecracker("artifact/template export"); err != nil {
-		return types.ExportResult{}, err
-	}
 	if checkpointID != "" && keepSource {
 		return types.ExportResult{}, fmt.Errorf("%w: checkpoint export always consumes the checkpoint", api.ErrBadRequest)
 	}
@@ -92,6 +89,10 @@ func (o *Orchestrator) ExportSandbox(ctx context.Context, apiKey, sid string, to
 		if !ownsSandbox(sb, apiKey) {
 			unlock()
 			return types.ExportResult{}, api.ErrNotFound
+		}
+		if err := rejectSandboxFirecracker(sb, "artifact/template export"); err != nil {
+			unlock()
+			return types.ExportResult{}, err
 		}
 		if sb.State == types.StateDeleting {
 			unlock()
@@ -500,9 +501,6 @@ func (o *Orchestrator) importSandboxWithKeyOptions(
 	options api.ImportOptions,
 	mmdsImport standaloneMMDSImport,
 ) (*types.Sandbox, error) {
-	if err := o.rejectFirecracker("artifact import/restore"); err != nil {
-		return nil, err
-	}
 	if targetID != "" && !types.ValidLocalSandboxID(targetID) {
 		return nil, fmt.Errorf("import-sandbox: invalid target sandbox ID: %w", api.ErrBadRequest)
 	}
@@ -599,6 +597,11 @@ func (o *Orchestrator) importSandboxWithKeyOptions(
 		Metadata:           metadata,
 		Env:                payload.Env,
 	}
+	// S/E imports are CH artifacts regardless of the current Create default.
+	if sb.Metadata == nil {
+		sb.Metadata = make(map[string]string)
+	}
+	sb.Metadata[sandboxBackendKey] = "cloud-hypervisor"
 	if deadlineOverride > 0 {
 		sb.DeadlineUnix = deadlineOverride
 	}
@@ -708,6 +711,11 @@ func (o *Orchestrator) prepareStandaloneTargetWithMMDS(ctx context.Context, id, 
 // service credentials restored from KMT1 come only from their typed payload
 // fields and are validated separately.
 func migrationSandboxMetadata(metadata map[string]string) (map[string]string, error) {
+	// S/E migration is CH-only. Do not silently erase an unknown or FC
+	// selection from an authenticated token and reinterpret its artifacts.
+	if err := rejectSandboxFirecracker(&types.Sandbox{Metadata: metadata}, "artifact import/restore"); err != nil {
+		return nil, err
+	}
 	metadata = workspace.PublicMetadata(metadata)
 	if metadata == nil {
 		return nil, nil

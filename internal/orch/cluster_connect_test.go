@@ -686,6 +686,7 @@ func TestPrepareClusterConnectConcurrentTargetIsInsertOnly(t *testing.T) {
 	sources := []*types.Sandbox{fixture.source, cloneClusterMigrationSource(fixture.source)}
 	sources[0].CreatedUnix = 101
 	sources[0].Metadata = map[string]string{"candidate": "first"}
+	sources[0].Metadata[sandboxBackendKey] = "cloud-hypervisor"
 	if err := materializeSandboxCredentials(sources[0], sandboxcfg.Credentials{
 		ServiceSecret: strings.Repeat("1", 64), EnvdAccessToken: "envd-first", TrafficAccessToken: "traffic-first",
 	}); err != nil {
@@ -693,6 +694,7 @@ func TestPrepareClusterConnectConcurrentTargetIsInsertOnly(t *testing.T) {
 	}
 	sources[1].CreatedUnix = 202
 	sources[1].Metadata = map[string]string{"candidate": "second"}
+	sources[1].Metadata[sandboxBackendKey] = "cloud-hypervisor"
 	if err := materializeSandboxCredentials(sources[1], sandboxcfg.Credentials{
 		ServiceSecret: strings.Repeat("2", 64), EnvdAccessToken: "envd-second", TrafficAccessToken: "traffic-second",
 	}); err != nil {

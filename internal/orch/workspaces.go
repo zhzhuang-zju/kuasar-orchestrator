@@ -71,9 +71,6 @@ func workspaceDeclared(sb *types.Sandbox, name string) bool {
 }
 
 func (o *Orchestrator) AttachWorkspace(ctx context.Context, id, apiKey, name string, input json.RawMessage) error {
-	if err := o.rejectFirecracker("dynamic workspace attachment"); err != nil {
-		return err
-	}
 	ctx, finish, err := o.workspaceOperation(ctx)
 	if err != nil {
 		return err
@@ -87,6 +84,9 @@ func (o *Orchestrator) AttachWorkspace(ctx context.Context, id, apiKey, name str
 	}
 	if !ownsSandbox(sb, apiKey) {
 		return api.ErrNotFound
+	}
+	if err := rejectSandboxFirecracker(sb, "dynamic workspace attachment"); err != nil {
+		return err
 	}
 	i := slices.IndexFunc(sb.WorkspacePlan, func(entry workspace.Prepared) bool { return entry.Name == name })
 	if i < 0 {

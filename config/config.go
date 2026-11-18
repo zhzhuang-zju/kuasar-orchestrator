@@ -446,7 +446,7 @@ func (u UnitsConfig) PoolWaitDuration() time.Duration {
 
 // SandboxConfig is the sandbox-instance defaults, sub-grouped for clarity.
 type SandboxConfig struct {
-	Backend           string                `yaml:"backend" json:"backend"` // cloud-hypervisor (default) or firecracker
+	Backend           string                `yaml:"backend" json:"backend"` // Create default: cloud-hypervisor (default) or firecracker
 	FirecrackerBinary string                `yaml:"firecracker_binary,omitempty" json:"firecracker_binary,omitempty"`
 	TimeoutSec        int                   `yaml:"timeout_sec" json:"timeout_sec"` // default TTL; default 300
 	DeadTTL           string                `yaml:"dead_ttl" json:"dead_ttl"`       // diagnostic dead-row retention; default 24h

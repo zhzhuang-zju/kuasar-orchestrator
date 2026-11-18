@@ -8,10 +8,11 @@ package sandboxcfg
 import (
 	"encoding/json"
 	"fmt"
-	"github.com/kuasar-sandbox/orchestrator/internal/workspace"
 	"net"
 	"os"
 	"strings"
+
+	"github.com/kuasar-sandbox/orchestrator/internal/workspace"
 
 	"github.com/kuasar-sandbox/orchestrator/internal/types"
 	rtconfig "github.com/kuasar-sandbox/sandboxer/pkg/config"
@@ -305,14 +306,14 @@ func MergeMetadata(base, over map[string]string) (map[string]string, error) {
 
 // MergeCreateMetadata layers request configuration over template, group, or
 // placement defaults while keeping restore policy, credentials, checkpoint,
-// MMDS and identity request-scoped. Only namespaces explicitly present in request are
+// MMDS, identity and backend request-scoped. Only namespaces explicitly present in request are
 // admitted for those values.
 func MergeCreateMetadata(defaults, request map[string]string) (map[string]string, error) {
 	out, err := MergeMetadata(defaults, request)
 	if err != nil {
 		return nil, err
 	}
-	for _, ns := range []string{NsRestore, NsCredentials, NsCheckpoint, NsMMDS, NsIdentity} {
+	for _, ns := range []string{NsRestore, NsCredentials, NsCheckpoint, NsMMDS, NsIdentity, NsBackend, InternalBackend} {
 		delete(out, ns)
 		if raw, ok := request[ns]; ok {
 			if out == nil {

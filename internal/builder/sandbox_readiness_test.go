@@ -134,7 +134,7 @@ func TestStartSandboxPassesReadinessFDAndClosesParentWriter(t *testing.T) {
 	wantSID := phaseSandboxID("a", p.spec.BuildID)
 	wantConfig := filepath.Join(runDir, "a", "sandbox.yaml")
 	wantArgs := []string{
-		"run", "--config", wantConfig,
+		"run", "--backend", "cloud-hypervisor", "--config", wantConfig,
 		"--run-root", runDir, "--base-root", baseDir,
 		"--path-id", "a", "--sandbox-id", wantSID,
 	}
@@ -220,6 +220,9 @@ func TestPhaseSandboxSourceArgumentsSeparateMaterializationAndMemoryCapture(t *t
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			args := phaseSandboxRunArgs(spec, test.phase, "phase-sandbox", "/run/build/sandbox.yaml", nil, test.from, test.replaceBoot)
+			if len(args) < 3 || args[0] != "run" || args[1] != "--backend" || args[2] != "cloud-hypervisor" {
+				t.Fatalf("build phases must explicitly use CH: %v", args)
+			}
 			hasReplace, hasRestore, fromValue := false, false, ""
 			checkpointFlags := 0
 			for i, arg := range args {

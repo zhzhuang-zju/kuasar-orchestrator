@@ -58,6 +58,7 @@ func TestImportMemorySelectionPersistsChosenSource(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			dir := t.TempDir()
 			o := migrationOrchestrator(t, dir, []byte("legacy-runtime"))
+			o.cfg.Sandbox.Backend = "firecracker"
 			source := migrationSandbox(t, dir, "source", strings.Repeat("6", 64), "manifest://"+strings.Repeat("b", 64))
 			if tc.source == types.ResumeSourceSandbox {
 				source.ResumeSource = types.ResumeSource{Kind: tc.source, Ref: source.ResumeSource.SandboxRef}
@@ -97,7 +98,7 @@ func TestImportMemorySelectionPersistsChosenSource(t *testing.T) {
 				t.Fatalf("imported state=%+v want source=%+v", got, expected)
 			}
 			row, err := o.st.Get(context.Background(), "target")
-			if err != nil || row.ResumeSource != expected {
+			if err != nil || row.ResumeSource != expected || row.Metadata[sandboxBackendKey] != "cloud-hypervisor" {
 				t.Fatalf("durable source=%+v err=%v", row, err)
 			}
 			payload, err := migrationtoken.Open(migrationtoken.KeyMaterial{APISecret: pair.APISecret, ManifestKey: pair.ManifestKey}, token)

@@ -506,6 +506,19 @@ The public [Sandbox request types and enums](../app/conductor/extension/sandbox_
 | `SandboxResumeRequest` | `RequestedDeadlineUnix *int64`, where nil uses core resume-deadline policy; immutable `Mode ResumeMode` (`auto`/`memory`/`cold`) and `Trigger ResumeTrigger` (`connect`/`wake`/`route`/`exec`/`exec-session`) |
 | `SandboxDeleteRequest` | `Reason string` is diagnostic; editing it does not alter cleanup behavior |
 
+`SandboxCreateRequest.Backend string` is the typed backend selector for direct
+and cluster Create Hooks, not a public Create JSON field. Public clients use
+`metadata["kuasar-sandbox.backend"] = "{\"name\":\"firecracker\"}"` (or CH).
+The public metadata selector is consumed before Hooks; adding it back in a Hook
+is rejected, even if it matches `Backend`. Hooks receive the resolved node/request selection and
+may set `cloud-hypervisor`, `firecracker` or empty (use node default). Core
+revalidates the final selection, resources and capabilities, then persists it
+immutably at Create acceptance. Do not write `kuasar-sandbox.internal.backend`.
+Selection does not rewrite resource defaults: FC needs explicit
+`allocatable.memory = capacity.memory` and is rejected with node
+`resource_listen.enabled`. This does not select a Build backend: Build always
+uses CH. See [Create backend](sandbox-lifecycle.md#create-backend).
+
 Direct Create may change the template within its immutable profile. Canonical cluster Create must retain its template and cluster metadata and leave top-level `MMDS` nil; it does not acquire direct-Create override authority.
 
 Build `register` runs after caller identity and IDs are resolved, but before the

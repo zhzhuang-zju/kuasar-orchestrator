@@ -169,9 +169,6 @@ func (o *Orchestrator) registerClusterBuild(ctx context.Context, cmd *routesync.
 }
 
 func (o *Orchestrator) registerClusterBuildWithResult(ctx context.Context, cmd *routesync.Command, acceptedTarget **types.BuildTarget) error {
-	if err := o.rejectFirecracker("builds"); err != nil {
-		return err
-	}
 	if cmd.BuildID == "" || cmd.TemplateRef == "" {
 		return fmt.Errorf("build_register: missing build_id / template_id")
 	}

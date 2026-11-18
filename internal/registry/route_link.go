@@ -65,6 +65,7 @@ type RouteResolve struct {
 // admits portable resource and traffic plus request-scoped restore, credentials, and
 // checkpoint namespaces into it.
 type SandboxReserveReq struct {
+	Backend         string            `json:"backend,omitempty"`
 	Workspaces      []workspace.Entry `json:"workspaces,omitempty"`
 	Config          map[string]string `json:"config,omitempty"`
 	IdleTimeout     *int64            `json:"idle_timeout,omitempty"`
@@ -265,7 +266,7 @@ func (r *Registry) serveReserve(w http.ResponseWriter, req *http.Request) {
 		}
 	}
 	for key := range body.Config {
-		if key != sandboxcfg.NsResource && key != sandboxcfg.NsTraffic &&
+		if key != sandboxcfg.NsBackend && key != sandboxcfg.NsResource && key != sandboxcfg.NsTraffic &&
 			key != sandboxcfg.NsRestore && key != sandboxcfg.NsCredentials && key != sandboxcfg.NsCheckpoint && key != workspace.Namespace {
 			http.Error(w, fmt.Sprintf("unsupported sandbox reserve config %q", key), http.StatusBadRequest)
 			return
@@ -275,7 +276,7 @@ func (r *Registry) serveReserve(w http.ResponseWriter, req *http.Request) {
 		http.Error(w, "create reserve cannot select resume memory", http.StatusBadRequest)
 		return
 	}
-	if operation == ReserveConnect && (len(body.Config) != 0 || body.AutoPauseMemory != nil || body.AutoReset != nil || body.IdleTimeout != nil) {
+	if operation == ReserveConnect && (body.Backend != "" || len(body.Config) != 0 || body.AutoPauseMemory != nil || body.AutoReset != nil || body.IdleTimeout != nil) {
 		http.Error(w, "connect reserve contains create fields", http.StatusBadRequest)
 		return
 	}
@@ -293,6 +294,7 @@ func (r *Registry) serveReserve(w http.ResponseWriter, req *http.Request) {
 		Service:           req.Header.Get("E2b-Sandbox-Service"),
 		MigrationToken:    req.Header.Get("X-Kuasar-Migration-Token"),
 		Config:            body.Config, Workspaces: body.Workspaces,
+		Backend:         body.Backend,
 		AutoPauseMemory: cloneOptionalBool(body.AutoPauseMemory), IdleTimeout: types.CloneIdleTimeout(body.IdleTimeout),
 		AutoReset: cloneOptionalBool(body.AutoReset),
 		Memory:    cloneOptionalBool(body.Memory),

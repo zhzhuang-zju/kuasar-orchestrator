@@ -16,6 +16,7 @@ import (
 	"github.com/kuasar-sandbox/orchestrator/internal/keys"
 	"github.com/kuasar-sandbox/orchestrator/internal/migrationtoken"
 	"github.com/kuasar-sandbox/orchestrator/internal/routesync"
+	"github.com/kuasar-sandbox/orchestrator/internal/sandboxcfg"
 	"github.com/kuasar-sandbox/orchestrator/internal/types"
 	"github.com/kuasar-sandbox/orchestrator/internal/workspace"
 )
@@ -56,6 +57,7 @@ type SandboxReserveRequest struct {
 	Service           string
 	MigrationToken    string
 	Config            map[string]string
+	Backend           string
 	IdleTimeout       *int64
 	AutoPauseMemory   *bool
 	AutoReset         *bool
@@ -65,6 +67,20 @@ type SandboxReserveRequest struct {
 // ReserveSandbox performs exactly one operation. Authentication precedes every
 // lifecycle mutation and command dispatch.
 func (r *Registry) ReserveSandbox(ctx context.Context, req SandboxReserveRequest) (*ReserveResult, error) {
+	if _, present := req.Config[sandboxcfg.NsBackend]; present && req.Operation != ReserveCreate {
+		return nil, fmt.Errorf("%w: backend is only valid for create", ErrReserveBadRequest)
+	}
+	backend, metadata, err := sandboxcfg.ExtractBackend(req.Config, req.Backend)
+	if err != nil {
+		return nil, fmt.Errorf("%w: %v", ErrReserveBadRequest, err)
+	}
+	req.Backend, req.Config = backend, metadata
+	if err := routesync.ValidateBackend(req.Backend); err != nil {
+		return nil, fmt.Errorf("%w: %v", ErrReserveBadRequest, err)
+	}
+	if req.Operation != ReserveCreate && req.Backend != "" {
+		return nil, fmt.Errorf("%w: backend is only valid for create", ErrReserveBadRequest)
+	}
 	if err := types.ValidateIdleTimeout(req.IdleTimeout); err != nil {
 		return nil, fmt.Errorf("%w: %v", ErrReserveBadRequest, err)
 	}
@@ -101,7 +117,7 @@ func (r *Registry) ReserveSandbox(ctx context.Context, req SandboxReserveRequest
 		if err := workspace.CheckEnvelope(req.Config, req.Workspaces); err != nil {
 			return nil, fmt.Errorf("%w: %v", ErrReserveBadRequest, err)
 		}
-		return r.reserveCreate(ctx, req.Group, req.RouteKey, req.Config, autoPauseMemory, autoReset, createOptions{req.IdleTimeout, req.Workspaces})
+		return r.reserveCreate(ctx, req.Group, req.RouteKey, req.Config, autoPauseMemory, autoReset, createOptions{idleTimeout: req.IdleTimeout, workspaces: req.Workspaces, backend: req.Backend})
 	case ReserveConnect:
 		if req.ExpectedSandboxID == "" || req.Port != 0 || req.TTLSeconds != 0 ||
 			len(req.ExecConditions) != 0 || req.AccessToken != "" || req.Service != "" || len(req.Config) != 0 || req.AutoPauseMemory != nil || req.AutoReset != nil || req.IdleTimeout != nil {

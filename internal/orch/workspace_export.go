@@ -31,9 +31,6 @@ func (o *Orchestrator) workspaceOperation(ctx context.Context) (context.Context,
 }
 
 func (o *Orchestrator) ExportWorkspace(ctx context.Context, id, apiKey, name string) (string, error) {
-	if err := o.rejectFirecracker("workspace capture/export"); err != nil {
-		return "", err
-	}
 	ctx, finish, err := o.workspaceOperation(ctx)
 	if err != nil {
 		return "", err
@@ -53,6 +50,9 @@ func (o *Orchestrator) ExportWorkspace(ctx context.Context, id, apiKey, name str
 	}
 	if !ownsSandbox(sb, apiKey) {
 		return "", api.ErrNotFound
+	}
+	if err := rejectSandboxFirecracker(sb, "workspace capture/export"); err != nil {
+		return "", err
 	}
 	if !workspaceDeclared(sb, name) && (len(sb.WorkspacePlan) > 0 || sb.State != types.StatePaused) {
 		return "", api.ErrNotFound

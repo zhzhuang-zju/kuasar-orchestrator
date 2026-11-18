@@ -1,5 +1,35 @@
 # Experimental Firecracker cold-image backend
 
+## Per-request selection validation
+
+The per-request implementation was exercised in the ARM64 QEMU laboratory on
+2026-11-17, before the public selector migrated to reserved metadata. One
+Conductor with a Cloud Hypervisor default accepted explicit
+`backend: cloud-hypervisor` and `backend: firecracker` Create requests. Both
+VMs ran concurrently, and both passed authenticated Proxy native exec and guest
+file write/read checks. An invalid backend was rejected with HTTP 400.
+
+With both VMs running, the node default was changed to Firecracker and Conductor
+was restarted. Both original sandboxes remained running and passed the same
+access checks. Both were then deleted,
+with GET returning 404, no remaining runner/VMM processes, and all 64 switch
+ports available again. This validates standalone mixed-backend recovery, not
+an end-to-end multi-node cluster deployment.
+
+Affected API, extension, config, lifecycle, Builder, runner, Router, Registry and
+route-protocol package tests passed. Backend-focused race tests also passed.
+Cluster propagation is covered by automated tests; no real cluster was deployed.
+
+The subsequent metadata-input migration is covered by automated tests only;
+the historical live checks above used the now-obsolete top-level selector.
+No worker deployment was changed or live test repeated for this migration.
+
+The lab now uses transient `kuasar-per-request-conductor` and
+`kuasar-per-request-proxy` services plus the existing Connector. Its default is
+Firecracker and its runner capacity is two. Verification sandboxes were deleted;
+earlier PicoD sandbox/token examples may have expired. These are handoff facts,
+not guarantees of current liveness or reboot persistence.
+
 Conductor remains the sandbox manager. It assigns an authenticated task to a
 systemd-managed runner, which starts `sandbox-ctl run --backend firecracker`.
 The enhanced runtime configures Firecracker through its Unix HTTP API and uses
@@ -9,10 +39,27 @@ protocols. Cloud Hypervisor remains the default backend.
 ## Scope
 
 This is a working **cold-image create / native exec / delete** implementation,
-not complete VMM feature parity. Backend selection is node configuration, not
-an untrusted API flag. The accepted backend is recorded in durable sandbox
-metadata. A node cannot restart with another backend while nonterminal
-sandboxes from the previous backend remain.
+not complete VMM feature parity. Create accepts reserved metadata
+`"kuasar-sandbox.backend": "{\"name\":\"firecracker\"}"`, or the same object with
+`name` set to `cloud-hypervisor` (CH), case-sensitively. Only omission selects
+`sandbox.backend` (CH by default). A supplied selector must be a JSON string
+containing exactly one object with a supported nonempty string `name`; null,
+empty values, wrong types, duplicate/unknown fields and trailing JSON fail.
+The obsolete public top-level `backend` field is rejected, including empty/null.
+There is no backend header alias or template/Build backend default.
+A node can host both backends;
+selection does not bypass authentication, admission or capability validation.
+Create Hooks receive the resolved selection in typed `SandboxCreateRequest.Backend`
+and may change it before core revalidation. The metadata selector is consumed
+before Hooks; Hooks cannot reintroduce it as a second authority.
+Cluster Create carries the normalized typed field
+through Router, Registry reservation and node-link to the selected node.
+
+The final selection is resolved and fixed at Create acceptance in core-owned
+durable metadata, not caller-writable metadata. Legacy rows without it mean CH.
+Changing the node default alone does not block recovery or change existing
+sandboxes' backends. Build always uses CH, independently of the node default;
+supported CH artifact imports are pinned to CH as well.
 
 Firecracker does not use the Cloud Hypervisor pmem, vhost-user, patched UFFD,
 or balloon-control integration. The adapter exposes the runtime bundle as a
@@ -27,6 +74,8 @@ The following are explicitly unsupported for this backend:
 - Snapshot/restore, pause/resume, reset, sandbox import/export and migration.
 - Builder execution, workspace-backed launches, dynamic disk slots and explicit
   persistent writable DIFF paths.
+- Auto-reset and idle auto-pause. FC TTL expiry performs Delete rather than
+   attempting unsupported Pause/capture, regardless of `autoPauseMemory`.
 - Dynamic resource control, memory ballooning, and manual DISCARD policy.
 - Encrypted local runtime storage.
 
@@ -65,10 +114,26 @@ sandbox:
     allocatable: {cpu: 1, memory: 384MiB}
 ```
 
-CPU capacity must be 1–32. Memory must be a positive whole MiB, with resolved
-allocatable and startup memory equal to capacity. Set allocatable memory
-explicitly: the node's omitted value normally resolves to 256 MiB. Disable
-`resource_listen`; omit startup memory or set it equal to capacity.
+CPU capacity must be 1–32. Memory must be a positive whole MiB, with explicit
+`allocatable.memory` equal to `capacity.memory`; omit startup memory or set it
+equal to capacity. FC is currently static-only: if node `resource_listen.enabled`
+is true, FC requests are rejected even with static memory settings. CH requests
+remain available. Resource validation follows the final selected backend; selection
+does not rewrite elastic CH defaults into FC-compatible resources. Supply the
+explicit allocation in node defaults or the request's resource patch (the omitted
+node value normally inherits 256 MiB).
+
+For example, on a CH-default node with `resource_listen` disabled:
+
+```json
+{
+   "templateID": "<canonical-image-template-id>",
+   "metadata": {
+      "kuasar-sandbox.backend": "{\"name\":\"firecracker\"}",
+      "kuasar-sandbox.resource": "{\"capacity\":{\"cpu\":1,\"memory\":\"384MiB\"},\"allocatable\":{\"memory\":\"384MiB\"}}"
+   }
+}
+```
 
 The guest kernel/runtime and ready canonical image template must match the
 architecture. Keep ordinary manifest-key/API authentication and Proxy enabled.
@@ -76,7 +141,10 @@ The Firecracker process is created directly in the delegated VMM cgroup and
 the TAP namespace. TAP FD handoff must identify a persistent interface;
 Firecracker opens the named interface after the runtime releases its queue.
 
-## Local validation
+## Earlier cold-backend validation
+
+The observations below predate per-request selection; they do not establish live
+validation of mixed-backend operation or the new cluster/Hook propagation.
 
 The [ARM64 QEMU lab](qemu-lab.md) was extended with an isolated adapter install
 under `/opt/kuasar-adapter` inside Debian. Original release files under

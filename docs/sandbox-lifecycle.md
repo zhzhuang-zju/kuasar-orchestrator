@@ -54,6 +54,50 @@ An explicit deadline intent on paused/starting survives a failed resume back to 
 
 The complete Exec session request, CEL conditions, credentials and failure semantics are defined in [access and proxy](node-proxy.md#exec-session-api).
 
+<a id="create-backend"></a>
+
+## Create backend
+
+Create accepts the reserved metadata key `kuasar-sandbox.backend`, whose value
+is a JSON **string** containing exactly `{"name":"cloud-hypervisor"}` (CH) or
+`{"name":"firecracker"}` (FC), case-sensitively:
+
+```json
+{
+  "templateID": "<canonical-image-template-id>",
+  "metadata": {
+    "kuasar-sandbox.backend": "{\"name\":\"firecracker\"}",
+    "kuasar-sandbox.resource": "{\"capacity\":{\"cpu\":1,\"memory\":\"384MiB\"},\"allocatable\":{\"memory\":\"384MiB\"}}"
+  }
+}
+```
+
+Omitting the metadata key selects the node's `sandbox.backend` (CH by default).
+If present, the object must contain a supported nonempty string `name` and no
+other fields. Null, empty values, wrong types, duplicate/unknown fields and
+trailing JSON are rejected. The obsolete public top-level `backend` field is
+rejected even when empty or null; no backend header alias is provided. This is
+Create-only configuration, not a portable template or Build default.
+
+The selector is consumed before routing/Hooks; Hooks use only typed `Backend`.
+The final selection, including any typed Create
+Hook adjustment, is validated and persisted immutably at Create acceptance.
+Cluster Create propagates it through Router, Registry and node-link; omission
+resolves at the selected node. Core-owned `kuasar-sandbox.internal.backend` cannot be supplied by
+callers or Hooks. Legacy rows without backend metadata mean CH; changing the node
+default does not change retained backends or alone prevent recovery. Build always
+uses CH, and supported CH imports stay pinned to CH, regardless of that default.
+
+A node can host both backends, but FC is currently static-only and rejected when
+node `resource_listen.enabled` is true. Explicitly supply `allocatable.memory`
+equal to `capacity.memory` in node defaults or the request resource patch; startup
+memory must be omitted or equal capacity. Backend selection does not convert CH
+resource defaults. FC supports disposable image cold Create/native exec/Delete,
+not Pause (including `memory=false`), Resume, Reset, import/export, workspaces,
+auto-reset or idle auto-pause. Its TTL performs Delete, not capture, regardless
+of `autoPauseMemory`. The capture/resume contracts below describe CH; see
+[Firecracker requirements and limits](firecracker.md).
+
 <a id="create-identity"></a>
 
 ## Create identity

@@ -37,6 +37,15 @@ func (o *Orchestrator) Create(ctx context.Context, req api.CreateReq) (*types.Sa
 	if pair.APISecret == "" {
 		return nil, api.ErrNotAllowed
 	}
+	requestedBackend, metadata, err := sandboxcfg.ExtractBackend(req.Metadata, req.Backend)
+	if err != nil {
+		return nil, fmt.Errorf("%w: %v", api.ErrBadRequest, err)
+	}
+	req.Metadata = metadata
+	backend, err := o.effectiveSandboxBackend(requestedBackend)
+	if err != nil {
+		return nil, err
+	}
 	identity, metadata, err := sandboxcfg.ExtractIdentity(req.Metadata)
 	if err != nil {
 		return nil, fmt.Errorf("%w: %v", api.ErrBadRequest, err)
@@ -59,7 +68,7 @@ func (o *Orchestrator) Create(ctx context.Context, req api.CreateReq) (*types.Sa
 
 	if o.extensionSandboxHook != nil {
 		candidate, err := o.prepareSandboxCreateHook(ctx, conductorextension.SandboxOriginDirect, sid, &conductorextension.SandboxCreateRequest{
-			TemplateID: tmpl.String(), Profile: conductorextension.Profile(tmpl.Profile), TimeoutSeconds: req.TimeoutSec,
+			TemplateID: tmpl.String(), Backend: backend, Profile: conductorextension.Profile(tmpl.Profile), TimeoutSeconds: req.TimeoutSec,
 			Metadata: cloneStringMap(req.Metadata), Env: cloneStringMap(req.EnvVars), Secure: req.Secure,
 			IdleTimeout: types.CloneIdleTimeout(req.IdleTimeout), AutoPauseMemory: cloneBool(req.AutoPauseMemory), AutoReset: req.AutoReset, MMDS: cloneString(req.MMDSHeader),
 		})
@@ -71,6 +80,10 @@ func (o *Orchestrator) Create(ctx context.Context, req api.CreateReq) (*types.Sa
 		}
 		if candidate.TimeoutSeconds <= 0 {
 			return nil, fmt.Errorf("%w: sandbox timeout must be positive", api.ErrBadRequest)
+		}
+		backend, err = o.effectiveSandboxBackend(candidate.Backend)
+		if err != nil {
+			return nil, err
 		}
 		finalTemplate, finalConfig, finalMMDS, err := o.normalizeSandboxCreateDefinition(ctx, req.APIKey, candidate.TemplateID, candidate.Metadata, candidate.MMDS)
 		if err != nil {
@@ -86,7 +99,7 @@ func (o *Orchestrator) Create(ctx context.Context, req api.CreateReq) (*types.Sa
 	}
 	normalized.Workspaces = req.Workspaces
 	accepted, attempt, err := o.acceptSandboxCreate(ctx, sandboxCreateSpec{
-		ID: sid, StableID: identity.StableID, Template: tmpl, Pair: pair,
+		ID: sid, StableID: identity.StableID, Backend: backend, Template: tmpl, Pair: pair,
 		Config: normalized, Env: req.EnvVars, TimeoutSeconds: req.TimeoutSec,
 		IdleTimeout: types.CloneIdleTimeout(req.IdleTimeout), AutoPauseMemory: req.AutoPauseMemory, AutoReset: req.AutoReset, InitialMMDS: initialMMDSRouteSecretValues(mmdsDoc),
 	})
@@ -138,6 +151,9 @@ type sandboxCreateConfig struct {
 }
 
 func (o *Orchestrator) normalizeSandboxCreateConfig(profile types.Profile, metadata map[string]string) (sandboxCreateConfig, error) {
+	if _, present := metadata[sandboxcfg.NsBackend]; present {
+		return sandboxCreateConfig{}, fmt.Errorf("%w: %s must be normalized before Hooks; use typed Backend", api.ErrBadRequest, sandboxcfg.NsBackend)
+	}
 	if _, present := metadata[sandboxBackendKey]; present {
 		return sandboxCreateConfig{}, fmt.Errorf("%w: sandbox backend is node-managed", api.ErrBadRequest)
 	}
@@ -186,6 +202,7 @@ func (o *Orchestrator) normalizeSandboxCreateConfig(profile types.Profile, metad
 type sandboxCreateSpec struct {
 	ID              string
 	StableID        string
+	Backend         string
 	Cluster         *types.ClusterSandboxContext
 	Template        types.TemplateID
 	Pair            store.KeyPair
@@ -202,7 +219,11 @@ type sandboxCreateSpec struct {
 // and node-link Create. Source-specific authentication and Hook restrictions
 // stay in the adapters; launch ownership and rollback stay in acceptFreshLaunch.
 func (o *Orchestrator) acceptSandboxCreate(ctx context.Context, spec sandboxCreateSpec) (*types.Sandbox, *launchAttempt, error) {
-	if o.firecracker() && (spec.Template.Kind != types.KindImg || spec.AutoReset || spec.IdleTimeout != nil || len(spec.Config.Workspaces) != 0 || spec.Config.Metadata[workspace.Namespace] != "") {
+	backend, err := o.effectiveSandboxBackend(spec.Backend)
+	if err != nil {
+		return nil, nil, err
+	}
+	if backend == "firecracker" && (spec.Template.Kind != types.KindImg || spec.AutoReset || spec.IdleTimeout != nil || len(spec.Config.Workspaces) != 0 || spec.Config.Metadata[workspace.Namespace] != "") {
 		return nil, nil, fmt.Errorf("%w: firecracker requires an image template with no auto-reset, idle auto-pause, or workspace slots", api.ErrBadRequest)
 	}
 	if err := types.ValidateIdleTimeout(spec.IdleTimeout); err != nil {
@@ -230,7 +251,7 @@ func (o *Orchestrator) acceptSandboxCreate(ctx context.Context, spec sandboxCrea
 	if sb.Metadata == nil {
 		sb.Metadata = make(map[string]string)
 	}
-	sb.Metadata[sandboxBackendKey] = o.cfg.Sandbox.EffectiveBackend()
+	sb.Metadata[sandboxBackendKey] = backend
 	if err := o.prepareCreateWorkspaces(ctx, sb, spec.Config.Workspaces, spec.Template.Kind == types.KindImg); err != nil {
 		return nil, nil, err
 	}

@@ -84,6 +84,7 @@ type SandboxRecord struct {
 	ArtifactLocation       string                    `json:"artifact_location,omitempty"`
 	TemplateID             string                    `json:"template_id,omitempty"`
 	Profile                string                    `json:"profile,omitempty"`
+	Backend                string                    `json:"backend,omitempty"` // durable create selection; empty keeps node default
 	APISecretFingerprint   string                    `json:"api_secret_fingerprint,omitempty"`
 	ManifestKeyFingerprint string                    `json:"manifest_key_fingerprint,omitempty"`
 	CreateCredentials      *sandboxcfg.Credentials   `json:"create_credentials,omitempty"`

@@ -83,6 +83,42 @@ sidecar 绕过。
 
 Exec session 的完整请求、CEL 条件、凭据与失败语义见[访问与代理](node-proxy_zh.md#exec-session-api)。
 
+<a id="create-backend"></a>
+
+## Create backend
+
+Create 接受保留 metadata key `kuasar-sandbox.backend`，值是 JSON **字符串**，
+内容为 `{"name":"cloud-hypervisor"}`（CH）或 `{"name":"firecracker"}`（FC），区分大小写：
+
+```json
+{
+  "templateID": "<canonical-image-template-id>",
+  "metadata": {
+    "kuasar-sandbox.backend": "{\"name\":\"firecracker\"}",
+    "kuasar-sandbox.resource": "{\"capacity\":{\"cpu\":1,\"memory\":\"384MiB\"},\"allocatable\":{\"memory\":\"384MiB\"}}"
+  }
+}
+```
+
+省略该 key 使用节点 `sandbox.backend`（默认 CH）。提供时必须包含受支持的非空字符串
+`name`，不允许其它字段；null、空值、错误类型、重复/未知字段或尾随 JSON 均拒绝。
+旧公开顶层 `backend` 字段即使为空或 null 也拒绝；不提供 backend header 别名。
+此配置仅用于 Create，不是可移植模板或 Build 默认值。该 key 在路由/Hook 前提取并移除，
+Hook 仅通过 typed `Backend` 修改选择。最终选择
+（含 typed Create Hook 的修改）在 Create 受理时重新校验并持久化，此后不可变。
+集群 Create 经 Router、Registry、node-link 传递该字段；省略时由最终节点解析默认值。
+调用方和 Hook 不得写入 core-owned `kuasar-sandbox.internal.backend`。旧记录缺少该 metadata 时按 CH
+恢复；修改节点默认值不会改变已有实例 backend，也不会单独阻止恢复。Build 始终使用 CH，
+受支持的 CH 制品导入也固定为 CH，均不受节点默认值影响。
+
+同一节点可运行两种 backend，但 FC 当前仅支持静态资源；节点启用 `resource_listen.enabled`
+时拒绝 FC。须在节点默认资源或请求 resource patch 中显式设置 `allocatable.memory`
+等于 `capacity.memory`，startup memory 省略或等于 capacity。选择 backend 不会自动转换
+CH 资源默认值。FC 支持一次性 image 冷 Create/native exec/Delete，不支持 Pause
+（包括 `memory=false`）、Resume、Reset、导入/导出、workspace、auto-reset 或 idle auto-pause。
+FC TTL 到期执行 Delete，不受 `autoPauseMemory` 影响，也不尝试 capture。下文捕获/恢复契约
+描述 CH；完整约束见 [Firecracker](firecracker.md)。
+
 <a id="create-identity"></a>
 
 ## Create 身份

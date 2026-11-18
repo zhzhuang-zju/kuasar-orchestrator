@@ -45,6 +45,7 @@ func TestExportImportKMT1RoundTripPreservesIdentityStateAndCredentials(t *testin
 	sb.Env = map[string]string{"FOO": "bar"}
 	sb.Metadata = map[string]string{
 		"k": "v", sandboxcfg.NsRestore: `{"prefetch":"memory"}`,
+		sandboxBackendKey:    "cloud-hypervisor",
 		sandboxcfg.NsTraffic: `{"max_inflight":{"total":9,"forward":0}}`,
 	}
 	sb.EnvdAccessToken = "source-envd-token"

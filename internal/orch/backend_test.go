@@ -24,54 +24,68 @@ func TestBackendMetadataDefault(t *testing.T) {
 	}
 }
 
-func TestBackendCreatePersistsNodeSelection(t *testing.T) {
+func TestBackendCreatePersistsRequestSelection(t *testing.T) {
 	for _, backend := range []string{"", "cloud-hypervisor", "firecracker"} {
-		t.Run("backend="+backend, func(t *testing.T) {
-			cfg := &config.Config{}
-			cfg.Sandbox.Backend = backend
-			o, ctx := newAsyncConnectTestOrchestrator(t, cfg, &countingLauncher{})
-			req := createRequestFixture(t, o, "1")
-			// Firecracker requires explicitly static memory, not the node's
-			// smaller default allocatable memory budget.
-			req.Metadata[sandboxcfg.NsResource] = `{"capacity":{"cpu":2,"memory":"2GiB"},"allocatable":{"memory":"2GiB"}}`
-			original := cloneStringMap(req.Metadata)
-			created, err := o.Create(ctx, req)
-			if err != nil {
-				t.Fatal(err)
-			}
-			want := cfg.Sandbox.EffectiveBackend()
-			if created.Metadata[sandboxBackendKey] != want {
-				t.Fatalf("accepted backend = %q, want %q", created.Metadata[sandboxBackendKey], want)
-			}
-			if !reflect.DeepEqual(req.Metadata, original) {
-				t.Fatal("Create mutated caller metadata")
-			}
-			created.Metadata[sandboxBackendKey] = "caller-mutated"
-			req.Metadata[sandboxBackendKey] = "caller-mutated"
-			current := waitForSandbox(t, o, ctx, created.ID, func(sb *types.Sandbox) bool {
-				return sb.State == types.StateRunning
-			}, "backend create running")
-			if current.Metadata[sandboxBackendKey] != want {
-				t.Fatalf("durable backend = %q, want %q", current.Metadata[sandboxBackendKey], want)
-			}
-			if _, err := o.launches.Wait(ctx, created.ID); err != nil {
-				t.Fatal(err)
-			}
-			// Bypass the hot cache: launch construction must recover the
-			// backend from the durable row, not the caller's returned map.
-			restarted := &Orchestrator{cfg: cfg, st: o.st, vs: stubVS{}, executables: o.executables}
-			spec, _, found, err := restarted.LaunchSpecFor(ctx, "sandbox:"+created.ID)
-			if err != nil || !found || spec == nil {
-				t.Fatalf("durable LaunchSpecFor = %+v, %t, %v", spec, found, err)
-			}
-			if !hasArgPair(spec.Args, "--backend", want) {
-				t.Fatalf("durable launch backend missing: %v", spec.Args)
-			}
-			if ok, err := o.Kill(ctx, created.ID, req.APIKey); err != nil || !ok {
-				t.Fatalf("Kill = %t, %v", ok, err)
-			}
-			waitForSandboxAbsent(t, o, ctx, created.ID, "backend create deletion")
-		})
+		for _, requested := range []string{"", "cloud-hypervisor", "firecracker"} {
+			t.Run("default="+backend+"/requested="+requested, func(t *testing.T) {
+				cfg := &config.Config{}
+				cfg.Sandbox.Backend = backend
+				o, ctx := newAsyncConnectTestOrchestrator(t, cfg, &countingLauncher{})
+				req := createRequestFixture(t, o, "1")
+				if requested != "" {
+					req.Metadata[sandboxcfg.NsBackend] = `{"name":"` + requested + `"}`
+				}
+				// Never silently enlarge the node's smaller allocatable budget.
+				req.Metadata[sandboxcfg.NsResource] = staticFirecrackerResource
+				original := cloneStringMap(req.Metadata)
+				created, err := o.Create(ctx, req)
+				if err != nil {
+					t.Fatal(err)
+				}
+				want := cfg.Sandbox.EffectiveBackend()
+				if requested != "" {
+					want = requested
+				}
+				if created.Metadata[sandboxBackendKey] != want {
+					t.Fatalf("accepted backend = %q, want %q", created.Metadata[sandboxBackendKey], want)
+				}
+				if _, present := created.Metadata[sandboxcfg.NsBackend]; present {
+					t.Fatal("request selector became a second durable backend authority")
+				}
+				if !reflect.DeepEqual(req.Metadata, original) {
+					t.Fatal("Create mutated caller metadata")
+				}
+				created.Metadata[sandboxBackendKey] = "caller-mutated"
+				req.Metadata[sandboxBackendKey] = "caller-mutated"
+				current := waitForSandbox(t, o, ctx, created.ID, func(sb *types.Sandbox) bool {
+					return sb.State == types.StateRunning
+				}, "backend create running")
+				if current.Metadata[sandboxBackendKey] != want {
+					t.Fatalf("durable backend = %q, want %q", current.Metadata[sandboxBackendKey], want)
+				}
+				if _, err := o.launches.Wait(ctx, created.ID); err != nil {
+					t.Fatal(err)
+				}
+				// Bypass the cache and change the default: only the row owns selection.
+				restartedConfig := cfg.Clone()
+				restartedConfig.Sandbox.Backend = "firecracker"
+				if want == "firecracker" {
+					restartedConfig.Sandbox.Backend = "cloud-hypervisor"
+				}
+				restarted := &Orchestrator{cfg: restartedConfig, st: o.st, vs: stubVS{}, executables: o.executables}
+				spec, _, found, err := restarted.LaunchSpecFor(ctx, "sandbox:"+created.ID)
+				if err != nil || !found || spec == nil {
+					t.Fatalf("durable LaunchSpecFor = %+v, %t, %v", spec, found, err)
+				}
+				if !hasArgPair(spec.Args, "--backend", want) {
+					t.Fatalf("durable launch backend missing: %v", spec.Args)
+				}
+				if ok, err := o.Kill(ctx, created.ID, req.APIKey); err != nil || !ok {
+					t.Fatalf("Kill = %t, %v", ok, err)
+				}
+				waitForSandboxAbsent(t, o, ctx, created.ID, "backend create deletion")
+			})
+		}
 	}
 }
 
@@ -212,44 +226,43 @@ func TestFirecrackerCreateRejectsUnsupportedLifecycle(t *testing.T) {
 
 func TestFirecrackerRejectsUnsupportedOperations(t *testing.T) {
 	cfg := &config.Config{}
-	cfg.Sandbox.Backend = "firecracker"
+	// The default is CH: restrictions come from the authorized sandbox.
 	lc := &countingLauncher{}
 	o, ctx := newAsyncConnectTestOrchestrator(t, cfg, lc)
 	vs := &resourcePreflightVS{}
 	o.vs = vs
 	req := createRequestFixture(t, o, "4")
+	sb := backendSandboxFixture(t, cfg, types.StateRunning, "firecracker")
+	sb.APISecret = deriveTestAPISecret(t, strings.Repeat("4", 64))
+	if err := o.st.Put(ctx, sb); err != nil {
+		t.Fatal(err)
+	}
 	for _, test := range []struct {
 		name string
 		call func() error
 	}{
 		{"pause snapshot", func() error {
-			_, err := o.Pause(ctx, "missing", req.APIKey, sandboxcfg.CaptureRequest{Kind: types.CaptureSnapshot})
+			_, err := o.Pause(ctx, sb.ID, req.APIKey, sandboxcfg.CaptureRequest{Kind: types.CaptureSnapshot})
 			return err
 		}},
 		{"pause without memory", func() error {
-			_, err := o.Pause(ctx, "missing", req.APIKey, sandboxcfg.CaptureRequest{Kind: types.CaptureSandbox})
+			_, err := o.Pause(ctx, sb.ID, req.APIKey, sandboxcfg.CaptureRequest{Kind: types.CaptureSandbox})
 			return err
 		}},
-		{"reset", func() error { return o.Reset(ctx, "missing", req.APIKey) }},
-		{"register build", func() error { _, err := o.RegisterBuild(ctx, req.APIKey, api.RegisterSpec{}); return err }},
-		{"trigger build", func() error {
-			return o.TriggerBuild(ctx, req.APIKey, "missing", "missing", api.TriggerSpec{}, api.BuildAuth{})
-		}},
-		{"export", func() error { _, err := o.ExportSandbox(ctx, req.APIKey, "missing", false, false, ""); return err }},
-		{"export template", func() error { _, err := o.ExportSandbox(ctx, req.APIKey, "missing", true, false, ""); return err }},
-		{"import", func() error {
-			_, err := o.ImportSandbox(ctx, req.APIKey, "invalid-token", "", api.ImportOptions{})
-			return err
-		}},
-		{"attach workspace", func() error { return o.AttachWorkspace(ctx, "missing", req.APIKey, "data", nil) }},
-		{"export workspace", func() error { _, err := o.ExportWorkspace(ctx, "missing", req.APIKey, "data"); return err }},
+		{"reset", func() error { return o.Reset(ctx, sb.ID, req.APIKey) }},
+		{"export", func() error { _, err := o.ExportSandbox(ctx, req.APIKey, sb.ID, false, false, ""); return err }},
+		{"export template", func() error { _, err := o.ExportSandbox(ctx, req.APIKey, sb.ID, true, false, ""); return err }},
+		{"attach workspace", func() error { return o.AttachWorkspace(ctx, sb.ID, req.APIKey, "data", nil) }},
+		{"export workspace", func() error { _, err := o.ExportWorkspace(ctx, sb.ID, req.APIKey, "data"); return err }},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			err := test.call()
 			if !errors.Is(err, api.ErrBadRequest) || !strings.Contains(err.Error(), "firecracker does not support") {
 				t.Fatalf("unsupported operation = %v", err)
 			}
-			assertNoFreshLaunchSideEffects(t, o, ctx, vs, lc)
+			if lc.starts.Load() != 0 || vs.attaches.Load() != 0 {
+				t.Fatal("rejected operation launched a sandbox")
+			}
 			var builds int
 			err = o.st.RangeBuilds(ctx, func(*types.Build) error { builds++; return nil })
 			if err != nil || builds != 0 {
@@ -259,9 +272,9 @@ func TestFirecrackerRejectsUnsupportedOperations(t *testing.T) {
 	}
 }
 
-func TestBackendRecoveryRejectsActiveSwitchBeforeSideEffects(t *testing.T) {
-	for _, backend := range []string{"", "cloud-hypervisor", "firecracker"} {
-		for _, state := range []types.State{types.StateStarting, types.StateRunning, types.StatePausing, types.StatePaused} {
+func TestBackendRecoveryRejectsUnknownBeforeSideEffects(t *testing.T) {
+	for _, backend := range []string{"qemu", "Firecracker", " firecracker"} {
+		for _, state := range []types.State{types.StateStarting, types.StateRunning, types.StatePausing, types.StatePaused, types.StateDead, types.StateDeleting} {
 			t.Run("stored="+backend+"/"+string(state), func(t *testing.T) {
 				cfg := &config.Config{}
 				cfg.Sandbox.Backend = "firecracker"
@@ -280,39 +293,41 @@ func TestBackendRecoveryRejectsActiveSwitchBeforeSideEffects(t *testing.T) {
 				if err != nil {
 					t.Fatal(err)
 				}
-				if err := o.ReconcileSandboxes(ctx); err == nil || !strings.Contains(err.Error(), "cannot switch sandbox.backend") || !strings.Contains(err.Error(), sb.ID) {
-					t.Fatalf("backend switch recovery = %v", err)
+				if err := o.ReconcileSandboxes(ctx); err == nil || !strings.Contains(err.Error(), "unsupported sandbox backend") || !strings.Contains(err.Error(), sb.ID) {
+					t.Fatalf("unknown backend recovery = %v", err)
 				}
 				after, err := o.st.Get(ctx, sb.ID)
 				if err != nil || !reflect.DeepEqual(before, after) {
 					t.Fatalf("failed recovery changed durable sandbox: %+v, %v", after, err)
 				}
 				if lc.listCalls != 0 || len(lc.stopped) != 0 || len(lc.reset) != 0 || lc.reloads != 0 || vs.attaches != 0 || len(vs.detached) != 0 {
-					t.Fatal("backend switch touched launcher or network before rejection")
+					t.Fatal("unknown backend touched launcher or network before rejection")
 				}
 			})
 		}
 	}
 }
 
-func TestBackendRecoveryAllowsMatchingAndTerminalSandboxes(t *testing.T) {
+func TestBackendRecoveryAllowsDefaultChanges(t *testing.T) {
 	for _, backend := range []string{"", "cloud-hypervisor", "firecracker"} {
 		for _, state := range []types.State{types.StateStarting, types.StateRunning, types.StatePausing, types.StatePaused, types.StateDead, types.StateDeleting} {
 			t.Run("stored="+backend+"/"+string(state), func(t *testing.T) {
 				cfg := &config.Config{}
-				cfg.Sandbox.Backend = backend
-				// Terminal rows do not prevent selecting a different backend.
-				if state == types.StateDead || state == types.StateDeleting {
-					cfg.Sandbox.Backend = "firecracker"
-					if backend == "firecracker" {
-						cfg.Sandbox.Backend = "cloud-hypervisor"
-					}
+				cfg.Sandbox.Backend = "firecracker"
+				if backend == "firecracker" {
+					cfg.Sandbox.Backend = "cloud-hypervisor"
 				}
 				o := testOrchCfg(t, cfg)
 				sb := backendSandboxFixture(t, cfg, state, backend)
 				ctx := context.Background()
 				if err := o.st.Put(ctx, sb); err != nil {
 					t.Fatal(err)
+				}
+				if backend == "firecracker" && (state == types.StatePaused || state == types.StatePausing) {
+					if err := o.validateBackendRecovery(ctx); err == nil {
+						t.Fatal("unsupported Firecracker pause state accepted")
+					}
+					return
 				}
 				if err := o.validateBackendRecovery(ctx); err != nil {
 					t.Fatalf("compatible recovery rejected: %v", err)
@@ -323,17 +338,24 @@ func TestBackendRecoveryAllowsMatchingAndTerminalSandboxes(t *testing.T) {
 }
 
 func TestFirecrackerRecoveryRejectsPendingReset(t *testing.T) {
-	cfg := &config.Config{}
-	cfg.Sandbox.Backend = "firecracker"
-	o := testOrchCfg(t, cfg)
-	sb := backendSandboxFixture(t, cfg, types.StateDead, "cloud-hypervisor")
-	sb.ResetState, sb.ResetID = "pending", "reset-backend"
-	ctx := context.Background()
-	if err := o.st.Put(ctx, sb); err != nil {
-		t.Fatal(err)
-	}
-	if err := o.validateBackendRecovery(ctx); err == nil || !strings.Contains(err.Error(), "pending sandbox reset "+sb.ID) {
-		t.Fatalf("pending reset recovery = %v", err)
+	for _, backend := range []string{"cloud-hypervisor", "firecracker"} {
+		cfg := &config.Config{}
+		cfg.Sandbox.Backend = "firecracker"
+		o := testOrchCfg(t, cfg)
+		sb := backendSandboxFixture(t, cfg, types.StateDead, backend)
+		sb.ResetState, sb.ResetID = "pending", "reset-backend"
+		ctx := context.Background()
+		if err := o.st.Put(ctx, sb); err != nil {
+			t.Fatal(err)
+		}
+		err := o.validateBackendRecovery(ctx)
+		if backend == "firecracker" {
+			if err == nil || !strings.Contains(err.Error(), "pending sandbox reset "+sb.ID) {
+				t.Fatalf("pending reset recovery = %v", err)
+			}
+		} else if err != nil {
+			t.Fatalf("CH pending reset rejected on FC default: %v", err)
+		}
 	}
 }
 
@@ -351,13 +373,7 @@ func TestFirecrackerBuildRecovery(t *testing.T) {
 				if err := o.st.PutBuild(ctx, build); err != nil {
 					t.Fatal(err)
 				}
-				err := o.validateBackendRecovery(ctx)
-				blocked := backend == "firecracker" && state != types.BuildReady && state != types.BuildError
-				if blocked {
-					if err == nil || !strings.Contains(err.Error(), "nonterminal build "+build.BuildID) {
-						t.Fatalf("nonterminal build recovery = %v", err)
-					}
-				} else if err != nil {
+				if err := o.validateBackendRecovery(ctx); err != nil {
 					t.Fatalf("compatible build recovery rejected: %v", err)
 				}
 			})

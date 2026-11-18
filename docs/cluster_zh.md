@@ -169,6 +169,18 @@ route key 时可获得新生成的 key；缺少 route key 的拒绝应在需要�
 
 dead/deleting Sandbox 保留管理定位。按 ID 查询、Reset、checkpoint 导出/删除及父对象 Delete 使用节点 APIEndpoint 与既有归属校验，不提供业务 DataEndpoint。仍占用的 group/route_key 在父对象最终删除前拒绝 Create。节点与集群 Create 同样保留 autoReset（默认 false）；Reset 成功不启动 VM。
 
+Create 还接受 `metadata["kuasar-sandbox.backend"]`，值是 JSON 字符串：
+`"{\"name\":\"cloud-hypervisor\"}"` 或 `"{\"name\":\"firecracker\"}"`。
+仅省略该 key 使用最终节点默认值；格式错误、null、空值、未知字段和旧公开顶层
+`backend` 字段均返回 400。Router 提取并移除 metadata key 后，经 route-link reserve、
+Registry 持久 reservation 和 typed node-link Create command 传递；节点完成最终 Hook、
+资源及能力校验，并将受理的 backend 固定为不可变。同节点可混跑两种 backend，但 FC
+当前仅支持静态资源，节点启用 `resource_listen.enabled` 时拒绝 FC；须在节点/请求资源中
+显式设置 `allocatable.memory = capacity.memory`，startup memory 省略或等于 capacity。
+FC TTL 执行 Delete 而非 Pause。Build 与受支持的 CH 导入始终使用 CH，不受节点默认值影响。
+见 [Create backend](sandbox-lifecycle_zh.md#create-backend) 与 [FC 限制](firecracker.md)；
+上面的 pause/resume 示例要求 CH。
+
 Create 的可空 `idleTimeout` 沿 route-link reserve、Registry 持久化记录、node-link
 create 和有效路由/列表视图完整传递；0 保留为立即启用策略。Pause 仍经 HTTP 转发，
 `ifIdleSince` 原样到达最终 Conductor，由该节点接收时钟校验，不新增 node-link Pause。

@@ -158,6 +158,21 @@ Retain shared templates/keys until the retention policy permits deletion.
 
 Dead/deleting Sandboxes keep their management location. ID-based query, Reset, checkpoint Export/Delete and parent Delete use the node APIEndpoint and existing ownership checks. They expose no business DataEndpoint. Create with an occupied group/route_key conflicts until final parent deletion. Node and cluster Create preserve autoReset (default false); Reset success does not start a VM.
 
+Create also accepts `metadata["kuasar-sandbox.backend"]` as a JSON string:
+`"{\"name\":\"cloud-hypervisor\"}"` or `"{\"name\":\"firecracker\"}"`.
+Only omission uses the selected node's default; malformed/null/empty selectors,
+unknown fields and the obsolete public top-level `backend` field return 400.
+Router consumes the metadata key and forwards a normalized typed selection
+through route-link reserve, the durable Registry
+reservation and typed node-link Create command; the node applies final Hook,
+resource and capability validation and fixes the accepted backend immutably.
+A mixed node can run both, but FC is static-only and rejected with node
+`resource_listen.enabled`; explicitly set `allocatable.memory = capacity.memory`
+in node/request resources (startup memory omitted or equal capacity). FC TTL
+deletes rather than pauses. Build and supported CH imports remain CH regardless
+of node defaults. See [Create backend](sandbox-lifecycle.md#create-backend) and
+[FC limits](firecracker.md); the pause/resume walkthrough above requires CH.
+
 Create preserves nullable `idleTimeout` through route-link reserve, Registry's
 durable reservation, node-link create and effective route/list views. Zero is
 retained as an enabled immediate policy. Pause keeps using HTTP forwarding:

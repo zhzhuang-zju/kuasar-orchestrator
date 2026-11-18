@@ -530,6 +530,17 @@ operation 是独立可变副本，精确有一个 request 字段非 nil。`ID`�
 | `SandboxResumeRequest` | `RequestedDeadlineUnix *int64`,nil 使用 core resume-deadline policy;不可变 `Mode ResumeMode`(`auto`/`memory`/`cold`) 与 `Trigger ResumeTrigger`(`connect`/`wake`/`route`/`exec`/`exec-session`) |
 | `SandboxDeleteRequest` | `Reason string` 仅诊断,修改不改变 cleanup 行为 |
 
+`SandboxCreateRequest.Backend string` 是直连及集群 Create Hook 的 typed backend 选择入口。
+它不是公开 Create JSON 字段；客户端使用
+`metadata["kuasar-sandbox.backend"] = "{\"name\":\"firecracker\"}"`（或 CH）。
+该 metadata key 在 Hook 前已提取移除；Hook 再次添加该 key 会被拒绝，即使与 `Backend` 相同。
+Hook 收到已解析的节点/请求选择，可改为 `cloud-hypervisor`、`firecracker` 或空字符串
+（使用节点默认值）。Core 重新校验最终选择、资源与能力，在 Create 受理时持久化且此后
+不可变；不得写入 `kuasar-sandbox.internal.backend`。选择不会自动转换资源默认值：FC 要求
+显式 `allocatable.memory = capacity.memory`，节点启用 `resource_listen.enabled` 时拒绝 FC。
+这不是 Build backend 选择入口；Build 始终使用 CH。见
+[Create backend](sandbox-lifecycle_zh.md#create-backend)。
+
 直连 Create 可在不可变 profile 内更改模板;canonical cluster Create 必须保留模板及 cluster metadata,
 并让顶层 `MMDS` 保持 nil,不因此取得直连 Create 的覆盖权限。
 

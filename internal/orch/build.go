@@ -160,9 +160,6 @@ func (o *Orchestrator) RegisterBuild(ctx context.Context, apiKey string, spec ap
 // image + steps + e2b start command and queue the build for the pool. Bare
 // builds reject start/ready commands and always produce an image.
 func (o *Orchestrator) TriggerBuild(ctx context.Context, apiKey, tid, bid string, spec api.TriggerSpec, auth api.BuildAuth) error {
-	if err := o.rejectFirecracker("builds"); err != nil {
-		return err
-	}
 	if err := validateBuildIDRequest(bid); err != nil {
 		return err
 	}

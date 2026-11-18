@@ -432,6 +432,19 @@ func ReadMsg(r io.Reader) (*Msg, error) {
 }
 
 func validateMessageLimits(m *Msg) error {
+	if m != nil && m.Cmd != nil {
+		for _, key := range []string{sandboxcfg.NsBackend, sandboxcfg.InternalBackend} {
+			if _, present := m.Cmd.Config[key]; present {
+				return fmt.Errorf("routesync: %s is not valid in command config; backend must be normalized", key)
+			}
+		}
+		if m.Cmd.Kind != CmdCreate && m.Cmd.BackendSpecified() {
+			return errors.New("routesync: backend is only valid for create")
+		}
+		if err := ValidateBackend(m.Cmd.Backend); err != nil {
+			return err
+		}
+	}
 	if m != nil && m.Cmd != nil && len(m.Cmd.MigrationToken) > migrationtoken.MaxWireSize {
 		return migrationtoken.ErrTokenTooLarge
 	}

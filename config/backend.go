@@ -4,7 +4,6 @@ import (
 	"fmt"
 	"path/filepath"
 
-	"github.com/kuasar-sandbox/orchestrator/internal/sandboxcfg"
 	rtconfig "github.com/kuasar-sandbox/sandboxer/pkg/config"
 )
 
@@ -25,25 +24,21 @@ func (c *Conductor) validateBackend() error {
 	if c.Sandbox.FirecrackerBinary != "" && !filepath.IsAbs(c.Sandbox.FirecrackerBinary) {
 		return fmt.Errorf("config: sandbox.firecracker_binary must be absolute")
 	}
-	if c.Sandbox.EffectiveBackend() != "firecracker" {
-		return nil
-	}
-	if c.ResourceListen != nil && c.ResourceListen.Enabled {
-		return fmt.Errorf("config: firecracker does not support resource_listen; disable the dynamic controller")
-	}
-	resources, err := sandboxcfg.ResolveResources(sandboxcfg.ResourceResolveInput{Node: c.Sandbox.Resources.nodeResourcePolicy()})
-	if err != nil {
-		return fmt.Errorf("config: %w", err)
-	}
-	return c.Sandbox.ValidateBackendResources(resources)
+	// Backend resources are validated against the final per-Create selection,
+	// not against this node default (which need not be used by any request).
+	return nil
 }
 
 // ValidateBackendResources checks the final resolved values, not just the node
 // defaults. In particular, omitted allocatable memory means 256MiB in the node
 // schema, NOT the runtime's capacity-memory default. Never silently enlarge it.
 func (s SandboxConfig) ValidateBackendResources(resources rtconfig.ResourcesConfig) error {
-	if s.EffectiveBackend() != "firecracker" {
+	switch s.EffectiveBackend() {
+	case "cloud-hypervisor":
 		return nil
+	case "firecracker":
+	default:
+		return fmt.Errorf("unsupported sandbox backend %q", s.Backend)
 	}
 	if resources.Control.Controller != "" {
 		return fmt.Errorf("firecracker: dynamic resource controller is unsupported")

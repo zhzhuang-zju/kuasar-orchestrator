@@ -95,7 +95,7 @@ func phaseSandboxRunArgs(s *configsock.BuildSpec, phase, sid, yamlPath string, c
 	// Build stages do not pause/resume. Keep their writable disks single-layer;
 	// checkpoint-backed inputs can still be materialized, and the final
 	// template snapshot copies disks independently of the runtime backend.
-	args := []string{"run"}
+	args := []string{"run", "--backend", "cloud-hypervisor"}
 	if from != "" {
 		args = append(args, "--from", from)
 		if replaceBoot {

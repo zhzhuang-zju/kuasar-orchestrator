@@ -81,9 +81,6 @@ func buildRegisterRequestFromCandidate(candidate *normalizedBuildRegistration) *
 // resources. It is run once for preliminary request validation and again after
 // a Hook so every modified field passes the core's canonical policy.
 func (o *Orchestrator) normalizeBuildRegistration(request *conductorextension.BuildRegisterRequest, mmdsHeader *string) (*normalizedBuildRegistration, error) {
-	if err := o.rejectFirecracker("builds (builder shares sandbox configuration)"); err != nil {
-		return nil, err
-	}
 	if request == nil {
 		return nil, fmt.Errorf("%w: build registration candidate is required", api.ErrBadRequest)
 	}
@@ -104,6 +101,11 @@ func (o *Orchestrator) normalizeBuildRegistration(request *conductorextension.Bu
 		return nil, fmt.Errorf("%w: build resources cannot fit builder.admission.execution", api.ErrBadRequest)
 	}
 	metadata := cloneStringMap(request.Metadata)
+	for _, key := range []string{sandboxcfg.NsBackend, sandboxcfg.InternalBackend} {
+		if _, present := metadata[key]; present {
+			return nil, fmt.Errorf("%w: %s is not valid for template builds", api.ErrBadRequest, key)
+		}
+	}
 	if _, present := metadata[sandboxcfg.NsIdentity]; present {
 		return nil, fmt.Errorf("%w: %s is not valid for template builds", api.ErrBadRequest, sandboxcfg.NsIdentity)
 	}

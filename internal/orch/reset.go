@@ -26,9 +26,6 @@ type sandboxResetWork struct {
 // stops waiting, not an accepted operation's responsibility. Every retry joins
 // the same persisted ID until success or a separately committed explicit failure.
 func (o *Orchestrator) Reset(ctx context.Context, id, apiKey string) error {
-	if err := o.rejectFirecracker("reset"); err != nil {
-		return err
-	}
 	// Admission does not need the disk grant: a manual request must be able to
 	// join a preparing automatic operation while that operation owns the source.
 	unlock := o.lifecycle.Lock(id)
@@ -40,6 +37,10 @@ func (o *Orchestrator) Reset(ctx context.Context, id, apiKey string) error {
 	if !ownsSandbox(sb, apiKey) {
 		unlock()
 		return api.ErrNotFound
+	}
+	if err := rejectSandboxFirecracker(sb, "reset"); err != nil {
+		unlock()
+		return err
 	}
 	if sb.State == types.StatePaused && sb.ResumeSource.Kind == types.ResumeSourceSandbox {
 		unlock()

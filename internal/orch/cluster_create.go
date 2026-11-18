@@ -54,6 +54,10 @@ func (o *Orchestrator) precheckCluster(ctx context.Context, cmd *routesync.Comma
 // fresh Sandbox constructor and durable admission as the direct API.
 func (o *Orchestrator) acceptClusterCreate(ctx context.Context, cmd *routesync.Command, pair store.KeyPair, tmpl types.TemplateID, normalized sandboxCreateConfig) (*types.Sandbox, *launchAttempt, error) {
 	admissionStarted := time.Now()
+	backend, err := o.effectiveSandboxBackend(cmd.Backend)
+	if err != nil {
+		return nil, nil, err
+	}
 	timeoutSeconds := o.cfg.Sandbox.TimeoutSec
 	var environment map[string]string
 	autoPauseMemory := cloneBool(cmd.AutoPauseMemory)
@@ -75,7 +79,7 @@ func (o *Orchestrator) acceptClusterCreate(ctx context.Context, cmd *routesync.C
 		}
 		clusterMetadata, clusterMetadataPresent := metadata[clusterstate.ObjectMetadataKey]
 		candidate, err := o.prepareSandboxCreateHook(ctx, conductorextension.SandboxOriginCluster, cmd.SID, &conductorextension.SandboxCreateRequest{
-			TemplateID: tmpl.String(), Profile: conductorextension.Profile(tmpl.Profile), TimeoutSeconds: timeoutSeconds,
+			TemplateID: tmpl.String(), Backend: backend, Profile: conductorextension.Profile(tmpl.Profile), TimeoutSeconds: timeoutSeconds,
 			Metadata: metadata, IdleTimeout: types.CloneIdleTimeout(idleTimeout), AutoPauseMemory: cloneBool(cmd.AutoPauseMemory), AutoReset: autoReset,
 		})
 		if err != nil {
@@ -86,6 +90,10 @@ func (o *Orchestrator) acceptClusterCreate(ctx context.Context, cmd *routesync.C
 		}
 		if candidate.TimeoutSeconds <= 0 {
 			return nil, nil, fmt.Errorf("%w: cluster sandbox timeout must be positive", api.ErrBadRequest)
+		}
+		backend, err = o.effectiveSandboxBackend(candidate.Backend)
+		if err != nil {
+			return nil, nil, err
 		}
 		if candidate.MMDS != nil {
 			return nil, nil, fmt.Errorf("%w: cluster create does not accept a top-level MMDS candidate", api.ErrBadRequest)
@@ -109,7 +117,7 @@ func (o *Orchestrator) acceptClusterCreate(ctx context.Context, cmd *routesync.C
 	accepted, attempt, err := o.acceptSandboxCreate(ctx, sandboxCreateSpec{
 		ID: cmd.SID, StableID: cmd.Cluster.StableID,
 		Cluster:  &types.ClusterSandboxContext{Group: cmd.Cluster.Group, RouteKey: cmd.Cluster.RouteKey},
-		Template: tmpl, Pair: pair, Config: normalized, Env: environment,
+		Template: tmpl, Backend: backend, Pair: pair, Config: normalized, Env: environment,
 		TimeoutSeconds: timeoutSeconds, IdleTimeout: idleTimeout, AutoPauseMemory: autoPauseMemory,
 		AutoReset: autoReset,
 	})

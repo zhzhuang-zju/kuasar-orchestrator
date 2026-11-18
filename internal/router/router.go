@@ -349,7 +349,8 @@ func (rt *Router) handleCreate(w http.ResponseWriter, r *http.Request) {
 	}
 	var autoPauseMemory, autoReset *bool
 	var idleTimeout *int64
-	createConfig, err := createSandboxPolicies(w, r, &autoPauseMemory, &idleTimeout, &autoReset)
+	var backend string
+	createConfig, err := createSandboxPoliciesWithBackend(w, r, &autoPauseMemory, &idleTimeout, &backend, &autoReset)
 	var entries []workspace.Entry
 	if err == nil {
 		createConfig, entries, err = workspace.Extract(createConfig)
@@ -368,7 +369,7 @@ func (rt *Router) handleCreate(w http.ResponseWriter, r *http.Request) {
 	}
 	res, err := rt.routeLinkReserve(
 		r.Context(), "create", group, routeKey, "", 0, 0, createConfig, autoPauseMemory, autoReset, nil, nil,
-		map[string]string{HeaderAPIKey: apiKeyFromRequest(r)}, createWireOptions{idleTimeout: idleTimeout, workspaces: entries},
+		map[string]string{HeaderAPIKey: apiKeyFromRequest(r)}, createWireOptions{idleTimeout: idleTimeout, workspaces: entries, backend: backend},
 	)
 	if err != nil {
 		rt.log.Warn("router: reserve", "group", group, "err", err)
@@ -413,6 +414,10 @@ func createSandboxMetadataWithAutoPauseMemory(w http.ResponseWriter, r *http.Req
 	return createSandboxPolicies(w, r, autoPauseMemory, nil, autoReset...)
 }
 func createSandboxPolicies(w http.ResponseWriter, r *http.Request, autoPauseMemory **bool, idleTimeout **int64, autoReset ...**bool) (map[string]string, error) {
+	return createSandboxPoliciesWithBackend(w, r, autoPauseMemory, idleTimeout, nil, autoReset...)
+}
+
+func createSandboxPoliciesWithBackend(w http.ResponseWriter, r *http.Request, autoPauseMemory **bool, idleTimeout **int64, backend *string, autoReset ...**bool) (map[string]string, error) {
 	if _, present := r.Header[http.CanonicalHeaderKey(HeaderIdentity)]; present {
 		return nil, fmt.Errorf("%s / %s is only supported by direct conductor Create", HeaderIdentity, sandboxcfg.NsIdentity)
 	}
@@ -451,7 +456,18 @@ func createSandboxPolicies(w http.ResponseWriter, r *http.Request, autoPauseMemo
 			if err := strictjson.DecodeAllowUnknown(trimmed, &body); err != nil {
 				return nil, fmt.Errorf("bad create body: %w", err)
 			}
+			if err := sandboxcfg.RejectObsoleteBackend(trimmed); err != nil {
+				return nil, err
+			}
 		}
+	}
+	selectedBackend, metadata, err := sandboxcfg.ExtractBackend(body.Metadata, "")
+	if err != nil {
+		return nil, err
+	}
+	body.Metadata = metadata
+	if backend != nil {
+		*backend = selectedBackend
 	}
 	if err := types.ValidateIdleTimeout(body.IdleTimeout); err != nil {
 		return nil, err
@@ -471,7 +487,6 @@ func createSandboxPolicies(w http.ResponseWriter, r *http.Request, autoPauseMemo
 	if len(autoReset) > 0 && autoReset[0] != nil {
 		*autoReset[0] = sandboxcfg.CloneBool(body.AutoReset)
 	}
-	var err error
 	body.Metadata, err = workspace.WithHeader(body.Metadata, r.Header)
 	if err != nil {
 		return nil, err
@@ -2043,6 +2058,7 @@ func randomHexID() string {
 type createWireOptions struct {
 	idleTimeout *int64
 	workspaces  []workspace.Entry
+	backend     string
 }
 
 func (rt *Router) routeLinkReserve(
@@ -2076,7 +2092,7 @@ func (rt *Router) routeLinkReserve(
 		create = opts[0]
 	}
 	if operation == "create" {
-		body, _ = json.Marshal(registry.SandboxReserveReq{Config: config, Workspaces: create.workspaces, IdleTimeout: create.idleTimeout, AutoPauseMemory: sandboxcfg.CloneBool(autoPauseMemory), AutoReset: sandboxcfg.CloneBool(autoReset)})
+		body, _ = json.Marshal(registry.SandboxReserveReq{Backend: create.backend, Config: config, Workspaces: create.workspaces, IdleTimeout: create.idleTimeout, AutoPauseMemory: sandboxcfg.CloneBool(autoPauseMemory), AutoReset: sandboxcfg.CloneBool(autoReset)})
 		if headers == nil {
 			headers = map[string]string{}
 		}

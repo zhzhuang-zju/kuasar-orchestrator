@@ -345,6 +345,9 @@ type BuildLogEntry struct {
 
 // CreateReq is the decoded POST /sandboxes body (subset the SDK sends).
 type CreateReq struct {
+	// Backend is normalized from kuasar-sandbox.backend metadata before Core.
+	// It is not a public top-level JSON field.
+	Backend         string            `json:"-"`
 	Workspaces      []workspace.Entry `json:"-"`
 	AutoReset       bool              `json:"autoReset,omitempty"`
 	MaxCheckpoints  int               `json:"max_checkpoints,omitempty"`
@@ -585,6 +588,15 @@ func (a *API) create(w http.ResponseWriter, r *http.Request) {
 	trimmed := bytes.TrimSpace(raw)
 	if len(trimmed) == 0 || trimmed[0] != '{' || strictjson.DecodeAllowUnknown(trimmed, &req) != nil {
 		writeErr(w, 400, "bad body")
+		return
+	}
+	if err := sandboxcfg.RejectObsoleteBackend(trimmed); err != nil {
+		writeErr(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	req.Backend, req.Metadata, err = sandboxcfg.ExtractBackend(req.Metadata, "")
+	if err != nil {
+		writeErr(w, http.StatusBadRequest, err.Error())
 		return
 	}
 	req.APIKey = apiKeyFrom(r.Context())

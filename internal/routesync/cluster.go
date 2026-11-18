@@ -2,6 +2,7 @@ package routesync
 
 import (
 	"encoding/json"
+	"errors"
 
 	"github.com/kuasar-sandbox/orchestrator/internal/sandboxcfg"
 	"github.com/kuasar-sandbox/orchestrator/internal/types"
@@ -232,6 +233,7 @@ type Command struct {
 	SID        string            `json:"sid,omitempty"`
 	// create and lifecycle credential binding
 	TemplateRef          string                 `json:"template_ref,omitempty"`           // canonical img/sbx/snp template ref
+	Backend              string                 `json:"backend,omitempty"`                // create: empty uses the node default
 	Profile              string                 `json:"profile,omitempty"`                // sandbox profile; also used by build_register
 	APISecretFingerprint string                 `json:"api_secret_fingerprint,omitempty"` // create selects an installed pair; later commands match the existing row
 	Config               map[string]string      `json:"config,omitempty"`                 // merged sandbox config (node default ⊕ group ⊕ create)
@@ -271,11 +273,11 @@ type Command struct {
 	BuildMMDSSecrets map[string]string `json:"build_mmds_secrets,omitempty"`
 
 	execConditionsSpecified bool
+	backendSpecified        bool
 }
 
-// UnmarshalJSON remembers whether exec_conditions was explicitly carried on
-// the wire. Empty unrestricted conditions are canonicalized to omission, and
-// other command kinds must reject the field even when an attacker sends [].
+// UnmarshalJSON remembers explicit create-only and exec-session-only fields.
+// Other command kinds must reject them even when their wire value is empty.
 func (c *Command) UnmarshalJSON(raw []byte) error {
 	type commandWire Command
 	var decoded commandWire
@@ -288,7 +290,25 @@ func (c *Command) UnmarshalJSON(raw []byte) error {
 	}
 	*c = Command(decoded)
 	_, c.execConditionsSpecified = fields["exec_conditions"]
+	_, c.backendSpecified = fields["backend"]
 	return nil
+}
+
+// BackendSpecified includes an explicitly empty or null wire field so other
+// command kinds cannot silently accept a create-only selection.
+func (c *Command) BackendSpecified() bool {
+	return c != nil && (c.backendSpecified || c.Backend != "")
+}
+
+// ValidateBackend accepts an optional per-create override without resolving the
+// node's default backend in the cluster control plane.
+func ValidateBackend(backend string) error {
+	switch backend {
+	case "", "cloud-hypervisor", "firecracker":
+		return nil
+	default:
+		return errors.New("backend must be cloud-hypervisor or firecracker, or empty for the node default")
+	}
 }
 
 // ExecConditionsSpecified reports whether a command carries the typed field.
